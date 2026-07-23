@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pure-multifloor-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Run multi-floor and integration artifact tests
+        run: >-
+          uv run --isolated --no-project --managed-python --python 3.11
+          --with 'attrs<26' --with pytest python -m pytest -q
+          procthor/tests/test_ai2thor_integration_artifacts.py
+          procthor/tests/test_multifloor_geometry.py
+          procthor/tests/test_multifloor_orchestration.py
+          procthor/tests/test_multifloor_specs.py

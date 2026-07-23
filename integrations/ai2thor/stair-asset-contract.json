@@ -1,0 +1,365 @@
+{
+  "contractVersion": "1.0.0",
+  "engineBaseCommit": "24f79883b4889e3f0e6f4ae301808b9025872dfc",
+  "assetId": "Staircase_Straight_3m_1m_4_5m",
+  "connectorType": "stairs",
+  "units": "meters",
+  "coordinateFrame": {
+    "origin": "center of the reserved core at the lower floor base",
+    "upAxis": "+y",
+    "ascentAxis": "+z"
+  },
+  "dimensions": {
+    "rise": 3.0,
+    "flightWidth": 1.0,
+    "flightRun": 4.5,
+    "reservedWidth": 1.2,
+    "reservedLength": 6.5,
+    "landingDepth": 1.0,
+    "maximumRampSlopeDegrees": 33.6900675
+  },
+  "component": {
+    "type": "Thor.Procedural.VerticalConnectorAsset",
+    "connectorType": "stairs",
+    "referenceRise": 3.0,
+    "referenceRun": 4.5,
+    "referenceWidth": 1.0,
+    "reservedEnvelopeWidth": 1.2,
+    "reservedEnvelopeLength": 6.5,
+    "prefabRootLocalScale": {
+      "x": 1.0,
+      "y": 1.0,
+      "z": 1.0
+    },
+    "requiredReferences": [
+      "walkableSurface",
+      "lowerLandingSurface",
+      "upperLandingSurface",
+      "lowerLandingAnchor",
+      "upperLandingAnchor"
+    ]
+  },
+  "anchors": {
+    "lowerLandingAnchor": {
+      "localPosition": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -2.75
+      }
+    },
+    "upperLandingAnchor": {
+      "localPosition": {
+        "x": 0.0,
+        "y": 3.0,
+        "z": 2.75
+      }
+    }
+  },
+  "walkableRamp": {
+    "required": true,
+    "parent": "prefabRoot",
+    "localTransform": "identity",
+    "collider": {
+      "type": "MeshCollider",
+      "enabled": true,
+      "isTrigger": false,
+      "continuous": true,
+      "width": 1.0,
+      "horizontalRun": 4.5,
+      "verticalRise": 3.0,
+      "localBoundsCenter": {
+        "x": 0.0,
+        "y": 1.5,
+        "z": 0.0
+      }
+    },
+    "renderer": {
+      "absentOrDisabled": true
+    },
+    "navMeshArea": "Walkable"
+  },
+  "runtimeWalkableCollider": {
+    "replacesAuthoredRampMesh": true,
+    "type": "MeshCollider",
+    "meshName": "ConnectedStairLandingRampCollider",
+    "sharedVertexSurfaceSegments": [
+      "lowerLanding",
+      "ramp",
+      "upperLanding"
+    ],
+    "landingWidth": 1.2,
+    "landingDepth": 1.0,
+    "flightWidth": 1.0,
+    "navMeshArea": "Walkable"
+  },
+  "landingPlatforms": {
+    "required": true,
+    "count": 2,
+    "parent": "walkableSurface",
+    "parentRelationship": "direct",
+    "anchorAndSurfaceSameTransform": true,
+    "localRotationIdentity": true,
+    "localScaleIdentity": true,
+    "width": 1.2,
+    "depth": 1.0,
+    "height": 0.2,
+    "coverSerializedLandingPolygons": true,
+    "colliders": {
+      "type": "BoxCollider",
+      "enabled": true,
+      "isTrigger": false,
+      "localCenter": {
+        "x": 0.0,
+        "y": -0.1,
+        "z": 0.0
+      },
+      "topFaceLocalY": 0.0
+    },
+    "physicalCollisionRetained": true,
+    "runtimeNavMeshSource": "ignored"
+  },
+  "navigation": {
+    "collectionGeometry": "PhysicsColliders",
+    "triggerCollidersExcludedFromBake": true,
+    "maximumMinRegionArea": 0.05,
+    "slopeSafetyMarginDegrees": 0.5,
+    "minimumAgentSlopeDegrees": 34.1900675,
+    "floorStructureObjectTag": "Floor",
+    "discreteMovementProjectsToLocalNavMesh": true,
+    "physicalSurfaceHeightRaycast": {
+      "originHeightAboveAgent": 0.5,
+      "distance": 2.5,
+      "excludedLayers": [
+        "Agent",
+        "SimObjInvisible"
+      ],
+      "recognizedFloorStructureTag": "Floor",
+      "recognizedConnectorSurfaces": [
+        "walkableSurface",
+        "lowerLandingSurface",
+        "upperLandingSurface"
+      ]
+    },
+    "movementLookAhead": {
+      "distances": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "sampleRadius": 0.25,
+      "maximumLateralOffset": 0.3,
+      "requiresPhysicalSurfaceAtHorizontalTarget": true,
+      "maximumPathLengthMultiplier": 5.0,
+      "pathLengthAdditiveTolerance": 0.1
+    },
+    "landingBoundaryLinks": {
+      "createdAfterNavMeshBuild": true,
+      "agentTypeIds": "active NavMeshSurfaceExtended components",
+      "lateralEdgesPerLanding": 2,
+      "exposedEndEdgesPerLanding": 1,
+      "sampleOffsetsAlongLanding": [
+        -0.25,
+        0.0,
+        0.25
+      ],
+      "endEdgeSampleOffsetsAcrossLandingWidth": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "stairQueryOffset": 0.3,
+      "roomQueryOffsets": [
+        0.3,
+        0.55,
+        0.8
+      ],
+      "sampleRadius": 0.25,
+      "width": 0.0,
+      "bidirectional": true,
+      "minimumSampledPairsPerLandingAndAgentType": 1,
+      "corridorClearance": {
+        "requiredBeforeLinkCreation": true,
+        "cast": "Physics.CapsuleCastAll",
+        "usesAgentBuildSettings": true,
+        "minimumRadius": 0.05,
+        "baseHeightOffset": 0.05,
+        "excludedLayers": [
+          "Agent",
+          "SimObjInvisible"
+        ],
+        "queryTriggerInteraction": "Ignore",
+        "allowedHits": [
+          "vertical connector walkable colliders",
+          "StructureObjectTag.Floor"
+        ]
+      },
+      "failureDiagnostics": [
+        "candidateCount",
+        "stairSampleCount",
+        "roomSampleCount"
+      ],
+      "lifecycleOwner": "VerticalConnectorAsset"
+    }
+  },
+  "generatorObjectClearance": {
+    "distanceFromReservedCore": 0.8,
+    "bufferJoinStyle": "mitre",
+    "appliedBeforeFloorObjectPlacement": true,
+    "purpose": "preserve room-side landing egress along every exposed core edge"
+  },
+  "slabOpenings": {
+    "coverEntireReservedCore": true,
+    "width": 1.2,
+    "length": 6.5
+  },
+  "visualHierarchy": {
+    "navMeshArea": "Not Walkable",
+    "stepColliders": "none",
+    "railColliders": "allowed but not walkable"
+  },
+  "registration": {
+    "scene": "unity/Assets/Scenes/Procedural/Procedural.unity",
+    "component": "Thor.Procedural.ProceduralAssetDatabase",
+    "field": "prefabs",
+    "exactNameRequired": true
+  },
+  "connectorRecordExample": {
+    "id": "vertical-connector|floor-0-to-1|connector-0",
+    "connectorType": "stairs",
+    "assetId": "Staircase_Straight_3m_1m_4_5m",
+    "lowerFloorId": "floor|0",
+    "upperFloorId": "floor|1",
+    "lowerRoomId": "room|2",
+    "upperRoomId": "room|4",
+    "position": {
+      "x": 5.0,
+      "y": 0.0,
+      "z": 5.0
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "assetContract": {
+      "rise": 3.0,
+      "flightWidth": 1.0,
+      "flightRun": 4.5,
+      "reservedWidth": 1.2,
+      "reservedLength": 6.5,
+      "walkableRampCollider": true
+    },
+    "landingPolygons": [
+      {
+        "id": "stair-landing|floor-0|connector-0|lower",
+        "floorId": "floor|0",
+        "roomId": "room|2",
+        "polygon": [
+          {
+            "x": 4.4,
+            "y": 0.0,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 0.0,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 0.0,
+            "z": 2.75
+          },
+          {
+            "x": 4.4,
+            "y": 0.0,
+            "z": 2.75
+          }
+        ]
+      },
+      {
+        "id": "stair-landing|floor-1|connector-0|upper",
+        "floorId": "floor|1",
+        "roomId": "room|4",
+        "polygon": [
+          {
+            "x": 4.4,
+            "y": 3.0,
+            "z": 7.25
+          },
+          {
+            "x": 5.6,
+            "y": 3.0,
+            "z": 7.25
+          },
+          {
+            "x": 5.6,
+            "y": 3.0,
+            "z": 8.25
+          },
+          {
+            "x": 4.4,
+            "y": 3.0,
+            "z": 8.25
+          }
+        ]
+      }
+    ],
+    "openingPolygons": [
+      {
+        "id": "stair-opening|floor-0|connector-0|ceiling",
+        "floorId": "floor|0",
+        "surfaceType": "ceiling",
+        "polygon": [
+          {
+            "x": 4.4,
+            "y": 2.8,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 2.8,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 2.8,
+            "z": 8.25
+          },
+          {
+            "x": 4.4,
+            "y": 2.8,
+            "z": 8.25
+          }
+        ]
+      },
+      {
+        "id": "stair-opening|floor-1|connector-0|floor",
+        "floorId": "floor|1",
+        "surfaceType": "floor",
+        "polygon": [
+          {
+            "x": 4.4,
+            "y": 3.0,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 3.0,
+            "z": 1.75
+          },
+          {
+            "x": 5.6,
+            "y": 3.0,
+            "z": 8.25
+          },
+          {
+            "x": 4.4,
+            "y": 3.0,
+            "z": 8.25
+          }
+        ]
+      }
+    ]
+  }
+}

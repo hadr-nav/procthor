@@ -2,6 +2,7 @@ import copy
 import logging
 import random
 from contextlib import contextmanager
+from numbers import Integral
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -9,7 +10,13 @@ from ai2thor.controller import Controller
 from attr import Attribute, Factory, field
 from attrs import define
 from procthor.constants import PROCTHOR_INITIALIZATION
-from procthor.utils.types import InvalidFloorplan, SamplingVars, Split
+from procthor.utils.types import (
+    InvalidFloorplan,
+    InvalidMultiFloorPlan,
+    MultiFloorCompatibilityError,
+    SamplingVars,
+    Split,
+)
 
 from ..databases import DEFAULT_PROCTHOR_DATABASE, ProcTHORDatabase
 from .ceiling_height import sample_ceiling_height
@@ -42,6 +49,13 @@ from .protocols import (
     AddWallObjectsProtocol,
     RandomizeObjectAttributesProtocol,
     SampleHouseStructureProtocol,
+)
+from .multifloor_specs import (
+    FloorSpec,
+    HouseSpec,
+    HouseSpecSampler,
+    PROCTHOR_MULTIFLOOR_HOUSE_SPEC_SAMPLER,
+    ResidentialHouseSpecSampler,
 )
 from .room_specs import PROCTHOR10K_ROOM_SPEC_SAMPLER, RoomSpec, RoomSpecSampler
 from .skyboxes import default_add_skybox
@@ -93,6 +107,9 @@ class HouseGenerator:
     generation_functions: GenerationFunctions = Factory(
         _create_default_generation_functions
     )
+    num_floors: Optional[int] = None
+    house_spec: Optional[HouseSpec] = None
+    house_spec_sampler: Optional[HouseSpecSampler] = None
 
     @split.validator
     def _valid_split(self, attribute: Attribute, value: Split) -> None:
@@ -100,15 +117,73 @@ class HouseGenerator:
             raise ValueError(f'split={value} must be in {{"train", "val", "test"}}')
 
     def __attrs_post_init__(self) -> None:
-        if self.seed is None:
+        if self.num_floors is not None:
+            if (
+                isinstance(self.num_floors, bool)
+                or not isinstance(self.num_floors, Integral)
+                or int(self.num_floors) not in {1, 2, 3}
+            ):
+                raise ValueError("num_floors must be one of None, 1, 2, or 3.")
+            self.num_floors = int(self.num_floors)
+        if self.house_spec is not None and not isinstance(self.house_spec, HouseSpec):
+            raise TypeError("house_spec must be a HouseSpec instance.")
+        if self.house_spec_sampler is not None and not isinstance(
+            self.house_spec_sampler, HouseSpecSampler
+        ):
+            raise TypeError("house_spec_sampler must be a HouseSpecSampler instance.")
+
+        has_legacy_spec = (
+            self.room_spec is not None
+            or self.room_spec_sampler is not None
+            or self.partial_house is not None
+        )
+        if self.house_spec is not None:
+            if self.num_floors is not None:
+                raise ValueError("house_spec and num_floors cannot be used together.")
+            if has_legacy_spec or self.house_spec_sampler is not None:
+                raise ValueError(
+                    "house_spec cannot be combined with room_spec, "
+                    "room_spec_sampler, partial_house, or house_spec_sampler."
+                )
+        elif self.num_floors in {2, 3} or self.house_spec_sampler is not None:
+            if has_legacy_spec:
+                raise ValueError(
+                    "Multi-floor generation cannot be combined with room_spec, "
+                    "room_spec_sampler, or partial_house."
+                )
+        if self.num_floors == 1 and self.house_spec_sampler is not None:
+            raise ValueError("num_floors=1 cannot be combined with house_spec_sampler.")
+
+        if (
+            self.house_spec is None
+            and self._uses_multifloor
+            and self.house_spec_sampler is None
+        ):
+            self.house_spec_sampler = PROCTHOR_MULTIFLOOR_HOUSE_SPEC_SAMPLER
+
+        if self.seed is None and not self._uses_multifloor:
             self.seed = random.randint(0, 2**15)
             logging.debug(f"Using seed {self.seed}")
         if self.seed is not None:
-            self.set_seed(self.seed)
-        if self.room_spec_sampler is None:
+            if self._uses_multifloor:
+                # The engine capability check must precede its first schema-2
+                # seed action; initializing Python RNG state consumes no sample.
+                random.seed(self.seed)
+                np.random.seed(self.seed)
+            else:
+                self.set_seed(self.seed)
+        if self.room_spec_sampler is None and not self._uses_multifloor:
             self.room_spec_sampler = PROCTHOR10K_ROOM_SPEC_SAMPLER
         if isinstance(self.room_spec, str):
             self.room_spec = self.room_spec_sampler[self.room_spec]
+
+    @property
+    def _uses_multifloor(self) -> bool:
+        return (
+            self.house_spec is not None
+            or self.house_spec_sampler is not None
+            or self.num_floors in {2, 3}
+        )
 
     def set_seed(self, seed: int) -> None:
         # TODO: Probably should not be done on a global level
@@ -126,6 +201,25 @@ class HouseGenerator:
         next_sampling_stage: Optional[NextSamplingStage] = NextSamplingStage.STRUCTURE,
     ) -> Tuple[House, Dict[NextSamplingStage, PartialHouse]]:
         """Sample a house specification compatible with AI2-THOR."""
+        if self._uses_multifloor:
+            if partial_house is not None:
+                raise ValueError(
+                    "Schema-2 generation does not accept a legacy PartialHouse."
+                )
+            if next_sampling_stage is not NextSamplingStage.STRUCTURE:
+                raise ValueError(
+                    "Schema-2 generation must start at "
+                    "NextSamplingStage.STRUCTURE; resuming a partial "
+                    "multi-floor house is not supported."
+                )
+            from .multifloor_generation import sample_multifloor_house
+
+            return sample_multifloor_house(
+                generator=self,
+                sampling_vars=sampling_vars,
+                return_partial_houses=return_partial_houses,
+            )
+
         if self.controller is None:
             # NOTE: assumes images are never used by this Controller.
             self.controller = Controller(quality="Low", **PROCTHOR_INITIALIZATION)

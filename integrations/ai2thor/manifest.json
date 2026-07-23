@@ -1,0 +1,35 @@
+{
+  "integrationVersion": "1.0.0",
+  "engineRepository": "allenai/ai2thor",
+  "engineBaseCommit": "24f79883b4889e3f0e6f4ae301808b9025872dfc",
+  "patch": {
+    "path": "ai2thor-schema2-multifloor.patch",
+    "sha256": "ad528f96a985401cda947d94dd24d209ecfa1e632887f96afc44a6b42afdff7b",
+    "applyCheck": "passed"
+  },
+  "supportedHouseSchemas": [
+    "1.0.0",
+    "2.0.0"
+  ],
+  "multiFloorSchema": "2.0.0",
+  "stairAsset": {
+    "assetId": "Staircase_Straight_3m_1m_4_5m",
+    "contractPath": "stair-asset-contract.json",
+    "contractSha256": "d18f188a13af79961d0a81ab17c18d048f5dd0c6032dfc41581e13f4d2171bcc"
+  },
+  "patchedSourceFiles": [
+    "unity/Assets/Scripts/BaseAgentComponent.cs",
+    "unity/Assets/Scripts/BaseFPSAgentController.cs",
+    "unity/Assets/Scripts/NavMeshSurfaceExtended.cs",
+    "unity/Assets/Scripts/ProceduralData.cs",
+    "unity/Assets/Scripts/ProceduralTools.cs",
+    "unity/Assets/Scripts/StructureObject.cs",
+    "unity/Assets/Scripts/VerticalConnectorAsset.cs"
+  ],
+  "verification": {
+    "diffCheck": "passed",
+    "cleanApplyAtPinnedCommit": "passed",
+    "unityCompile": "requires persistent AI2-THOR checkout",
+    "unityPlayMode": "requires curated prefab"
+  }
+}

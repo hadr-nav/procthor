@@ -11,10 +11,21 @@ import numpy as np
 from ai2thor.controller import Controller
 from attrs import define
 from moviepy.editor import ImageSequenceClip
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 
-from procthor.constants import FLOOR_Y, PROCTHOR_INITIALIZATION, SCHEMA
-from procthor.generation.agent import AgentPose, generate_starting_pose
+from procthor.constants import (
+    FLOOR_Y,
+    FLOOR_TO_FLOOR_HEIGHT,
+    MULTI_FLOOR_AI2THOR_COMMIT,
+    MULTI_FLOOR_SCHEMA,
+    PROCTHOR_INITIALIZATION,
+    SCHEMA,
+)
+from procthor.generation.agent import (
+    AGENT_Y_HEIGHT,
+    AgentPose,
+    generate_starting_pose,
+)
 from procthor.utils.types import (
     BoundingBox,
     Door,
@@ -53,17 +64,30 @@ class House:
     interior_boundary: np.array
     room_spec: RoomSpec
     add_metadata: bool = True
+    room_floor_map: Optional[Dict[int, float]] = None
+    house_spec_id: Optional[str] = None
+    floor_room_spec_ids: Optional[List[str]] = None
 
     def __attrs_post_init__(self) -> None:
         if self.add_metadata:
             self._add_metadata()
 
     def _add_metadata(self) -> None:
-        self.data["metadata"] = {
-            "agent": self.choose_agent_pose(),
-            "roomSpecId": self.room_spec.room_spec_id,
-            "schema": SCHEMA,
-        }
+        if self.room_floor_map is None:
+            self.data["metadata"] = {
+                "agent": self.choose_agent_pose(),
+                "roomSpecId": self.room_spec.room_spec_id,
+                "schema": SCHEMA,
+            }
+        else:
+            self.data["metadata"] = {
+                "agent": self.choose_agent_pose(),
+                "houseSpecId": self.house_spec_id,
+                "floorRoomSpecIds": self.floor_room_spec_ids,
+                "numFloors": len(self.data["floors"]),
+                "schema": MULTI_FLOOR_SCHEMA,
+                "ai2thorCommit": MULTI_FLOOR_AI2THOR_COMMIT,
+            }
 
     def to_json(self, filename: Optional[str] = None, compressed: bool = False) -> str:
         json_rep = json.dumps(self.data, sort_keys=True, indent=4)
@@ -97,7 +121,7 @@ class House:
 
     def choose_agent_pose(self) -> AgentPose:
         """Generate a starting position for the default agent in the house."""
-        return generate_starting_pose(self.rooms)
+        return generate_starting_pose(self.rooms, room_floor_map=self.room_floor_map)
 
     def validate(self, controller: Controller) -> Dict[str, str]:
         """Validate that the house is useable.
@@ -134,16 +158,47 @@ class House:
 
         random.shuffle(rps)
 
-        # Check that every room is reachable
+        # Schema 2 uses the reachable point's elevation so vertically stacked
+        # rooms are not conflated in X/Z.
         points_per_room = Counter({r: 0 for r in self.rooms})
         for p in rps:
             point = Point(p["x"], p["z"])
+            matched_room = False
             for room_id in self.rooms.keys():
                 room_poly = self.rooms[room_id].room_polygon.polygon
-                if room_poly.contains(point):
+                base_y = (
+                    None
+                    if self.room_floor_map is None
+                    else self.room_floor_map[room_id]
+                )
+                expected_agent_y = None if base_y is None else base_y + AGENT_Y_HEIGHT
+                on_floor = expected_agent_y is None or (
+                    abs(p.get("y", expected_agent_y) - expected_agent_y) <= 0.2
+                )
+                if on_floor and room_poly.contains(point):
                     points_per_room[room_id] += 1
+                    matched_room = True
                     break
-            else:
+
+            on_connector = False
+            if not matched_room and self.room_floor_map is not None:
+                for connector in self.data.get("verticalConnectors", []):
+                    opening_polygons = connector.get("openingPolygons", [])
+                    if not opening_polygons:
+                        continue
+                    core = Polygon(
+                        [
+                            (vertex["x"], vertex["z"])
+                            for vertex in opening_polygons[0]["polygon"]
+                        ]
+                    )
+                    lower_y = connector["position"]["y"]
+                    upper_y = lower_y + FLOOR_TO_FLOOR_HEIGHT + AGENT_Y_HEIGHT + 0.2
+                    if lower_y <= p.get("y", lower_y) <= upper_y and core.covers(point):
+                        on_connector = True
+                        break
+
+            if not matched_room and not on_connector:
                 warnings[f"Unreachable point: {p}"] = "Unreachable point."
 
             if all(num_points >= 5 for num_points in points_per_room.values()):

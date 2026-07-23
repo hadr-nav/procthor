@@ -1,0 +1,2015 @@
+diff --git a/unity/Assets/Scripts/BaseAgentComponent.cs b/unity/Assets/Scripts/BaseAgentComponent.cs
+index 2c86c1bd6..6994711e0 100644
+--- a/unity/Assets/Scripts/BaseAgentComponent.cs
++++ b/unity/Assets/Scripts/BaseAgentComponent.cs
+@@ -72,6 +72,8 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+                 if (
+                     hit.gameObject.GetComponent<StructureObject>().WhatIsMyStructureObjectTag
+                     == StructureObjectTag.Floor
++                    || hit.gameObject.GetComponent<StructureObject>().WhatIsMyStructureObjectTag
++                        == StructureObjectTag.Stairs
+                 ) {
+                     return;
+                 }
+diff --git a/unity/Assets/Scripts/BaseFPSAgentController.cs b/unity/Assets/Scripts/BaseFPSAgentController.cs
+index 5a52738ef..f2ba8f9c4 100644
+--- a/unity/Assets/Scripts/BaseFPSAgentController.cs
++++ b/unity/Assets/Scripts/BaseFPSAgentController.cs
+@@ -523,6 +523,120 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             };
+         }
+
++        private static bool pointInTriangle(
++            Vector2 point,
++            Vector2 a,
++            Vector2 b,
++            Vector2 c,
++            out Vector3 barycentric
++        ) {
++            var denominator = (b.y - c.y) * (a.x - c.x)
++                + (c.x - b.x) * (a.y - c.y);
++            if (Mathf.Abs(denominator) < 1e-6f) {
++                barycentric = Vector3.zero;
++                return false;
++            }
++            var u = ((b.y - c.y) * (point.x - c.x)
++                + (c.x - b.x) * (point.y - c.y)) / denominator;
++            var v = ((c.y - a.y) * (point.x - c.x)
++                + (a.x - c.x) * (point.y - c.y)) / denominator;
++            var w = 1.0f - u - v;
++            barycentric = new Vector3(u, v, w);
++            return u >= -1e-4f && v >= -1e-4f && w >= -1e-4f;
++        }
++
++        private Vector3[] getMultiFloorReachablePositions(
++            float gridMultiplier,
++            int maxStepCount,
++            bool directionsRelativeAgent,
++            float? requestedGridSize
++        ) {
++            var spacing = requestedGridSize.GetValueOrDefault(BaseFPSAgentController.gridSize)
++                * gridMultiplier;
++            if (spacing <= 0) {
++                throw new ArgumentException("gridSize must be positive.");
++            }
++            NavMeshHit startHit;
++            if (!NavMesh.SamplePosition(transform.position, out startHit, 2.0f, NavMesh.AllAreas)) {
++                throw new InvalidOperationException("Agent is not near the schema-2 NavMesh.");
++            }
++            var agentYOffset = transform.position.y - startHit.position.y;
++            var right = directionsRelativeAgent ? transform.right : Vector3.right;
++            var forward = directionsRelativeAgent ? transform.forward : Vector3.forward;
++            right.y = 0;
++            forward.y = 0;
++            right.Normalize();
++            forward.Normalize();
++
++            var triangulation = NavMesh.CalculateTriangulation();
++            var reachable = new HashSet<Vector3>();
++            var attempted = 0;
++            var candidateLimit = Math.Floor(maxStepCount / (spacing * spacing));
++            for (int triangle = 0; triangle < triangulation.indices.Length; triangle += 3) {
++                var worldA = triangulation.vertices[triangulation.indices[triangle]];
++                var worldB = triangulation.vertices[triangulation.indices[triangle + 1]];
++                var worldC = triangulation.vertices[triangulation.indices[triangle + 2]];
++                var a = new Vector2(
++                    Vector3.Dot(worldA - transform.position, right),
++                    Vector3.Dot(worldA - transform.position, forward)
++                );
++                var b = new Vector2(
++                    Vector3.Dot(worldB - transform.position, right),
++                    Vector3.Dot(worldB - transform.position, forward)
++                );
++                var c = new Vector2(
++                    Vector3.Dot(worldC - transform.position, right),
++                    Vector3.Dot(worldC - transform.position, forward)
++                );
++                var minU = Mathf.CeilToInt(Mathf.Min(a.x, Mathf.Min(b.x, c.x)) / spacing);
++                var maxU = Mathf.FloorToInt(Mathf.Max(a.x, Mathf.Max(b.x, c.x)) / spacing);
++                var minV = Mathf.CeilToInt(Mathf.Min(a.y, Mathf.Min(b.y, c.y)) / spacing);
++                var maxV = Mathf.FloorToInt(Mathf.Max(a.y, Mathf.Max(b.y, c.y)) / spacing);
++                for (int uIndex = minU; uIndex <= maxU; uIndex++) {
++                    for (int vIndex = minV; vIndex <= maxV; vIndex++) {
++                        attempted++;
++                        if (attempted > candidateLimit) {
++                            throw new InvalidOperationException(
++                                "Too many candidates in schema-2 GetReachablePositions."
++                            );
++                        }
++                        var uv = new Vector2(uIndex * spacing, vIndex * spacing);
++                        Vector3 weights;
++                        if (!pointInTriangle(uv, a, b, c, out weights)) {
++                            continue;
++                        }
++                        var surfaceY = weights.x * worldA.y
++                            + weights.y * worldB.y
++                            + weights.z * worldC.y;
++                        var query = transform.position
++                            + right * uv.x
++                            + forward * uv.y;
++                        query.y = surfaceY;
++                        NavMeshHit hit;
++                        if (!NavMesh.SamplePosition(
++                            query,
++                            out hit,
++                            Mathf.Max(0.1f, spacing * 0.45f),
++                            NavMesh.AllAreas
++                        )) {
++                            continue;
++                        }
++                        var path = new NavMeshPath();
++                        if (!NavMesh.CalculatePath(
++                            startHit.position,
++                            hit.position,
++                            NavMesh.AllAreas,
++                            path
++                        ) || path.status != NavMeshPathStatus.PathComplete) {
++                            continue;
++                        }
++                        reachable.Add(new Vector3(query.x, hit.position.y + agentYOffset, query.z));
++                    }
++                }
++            }
++            return reachable.ToArray();
++        }
++
+         public Vector3[] getReachablePositions(
+             float gridMultiplier = 1.0f,
+             int maxStepCount = 10000,
+@@ -532,6 +646,14 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             bool directionsRelativeAgent = false,
+             float? gridSize = null
+         ) { // max step count represents a 100m * 100m room. Adjust this value later if we end up making bigger rooms?
++            if (ProceduralTools.ACTIVE_HOUSE_SCHEMA == ProceduralTools.MULTI_FLOOR_HOUSE_SCHEMA) {
++                return getMultiFloorReachablePositions(
++                    gridMultiplier,
++                    maxStepCount,
++                    directionsRelativeAgent,
++                    gridSize
++                );
++            }
+             CapsuleData capsule = GetAgentCapsule();
+
+             // Debug.Log($"Capsule collider: {cc.radius}, height {cc.height}, innerheight: {cc.height / 2.0f - cc.radius;} startpos: {transform.position + cc.transform.TransformDirection(cc.center)}");
+@@ -1448,6 +1570,223 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+         // checks before actually moving. Previously we would moveCharacter() first and if we hit anything reset, but now to match
+         // Luca's movement grid and valid position generation, simple transform setting is used for movement instead.
+
++        private HashSet<Collider> multiFloorMovementIgnoreColliders(
++            HashSet<Collider> ignoreColliders
++        ) {
++            var result = ignoreColliders == null
++                ? new HashSet<Collider>()
++                : new HashSet<Collider>(ignoreColliders);
++            foreach (var connector in GameObject.FindObjectsOfType<VerticalConnectorAsset>()) {
++                if (connector.walkableSurface == null) {
++                    continue;
++                }
++                foreach (
++                    var collider in connector.walkableSurface.GetComponentsInChildren<Collider>(true)
++                ) {
++                    result.Add(collider);
++                }
++            }
++            return result;
++        }
++
++        private bool tryGetMultiFloorWalkableSurfaceY(
++            Vector3 position,
++            out float surfaceY
++        ) {
++            var origin = new Vector3(
++                position.x,
++                transform.position.y + 0.5f,
++                position.z
++            );
++            var layerMask = ~LayerMask.GetMask("Agent", "SimObjInvisible");
++            foreach (
++                var hit in Physics
++                    .RaycastAll(origin, Vector3.down, 2.5f, layerMask)
++                    .OrderBy(candidate => candidate.distance)
++            ) {
++                var structure = hit.collider.GetComponentInParent<StructureObject>();
++                if (
++                    structure != null
++                    && structure.WhatIsMyStructureObjectTag == StructureObjectTag.Floor
++                ) {
++                    surfaceY = hit.point.y;
++                    return true;
++                }
++                var connector = hit.collider.GetComponentInParent<VerticalConnectorAsset>();
++                if (connector == null) {
++                    continue;
++                }
++                foreach (
++                    var connectorSurface in new[] {
++                        connector.walkableSurface,
++                        connector.lowerLandingSurface,
++                        connector.upperLandingSurface
++                    }
++                ) {
++                    if (
++                        connectorSurface != null
++                        && (
++                            hit.collider.gameObject == connectorSurface
++                            || hit.collider.transform.IsChildOf(
++                                connectorSurface.transform
++                            )
++                        )
++                    ) {
++                        surfaceY = hit.point.y;
++                        return true;
++                    }
++                }
++            }
++            surfaceY = 0.0f;
++            return false;
++        }
++
++        private bool tryProjectMultiFloorMovementTarget(
++            Vector3 horizontalTarget,
++            float horizontalDistance,
++            out Vector3 projectedTarget
++        ) {
++            projectedTarget = horizontalTarget;
++            NavMeshHit startHit;
++            var controllerScaleY = Mathf.Abs(
++                m_CharacterController.transform.lossyScale.y
++            );
++            var controllerBottomY = m_CharacterController.transform
++                .TransformPoint(m_CharacterController.center).y
++                - m_CharacterController.height * controllerScaleY / 2.0f;
++            if (!NavMesh.SamplePosition(
++                new Vector3(transform.position.x, controllerBottomY, transform.position.z),
++                out startHit,
++                0.35f,
++                NavMesh.AllAreas
++            )) {
++                errorMessage = "Agent is not on the schema-2 navmesh.";
++                return false;
++            }
++
++            var query = horizontalTarget;
++            query.y = startHit.position.y;
++            NavMeshHit targetHit;
++            var targetWasSampled = NavMesh.SamplePosition(
++                query,
++                out targetHit,
++                Mathf.Max(0.35f, horizontalDistance),
++                NavMesh.AllAreas
++            );
++            var targetXZ = new Vector2(horizontalTarget.x, horizontalTarget.z);
++            var hitXZ = targetWasSampled
++                ? new Vector2(targetHit.position.x, targetHit.position.z)
++                : Vector2.zero;
++            var usedLinkLookAhead = !targetWasSampled
++                || Vector2.Distance(targetXZ, hitXZ) > 0.3f;
++            if (usedLinkLookAhead) {
++                var movementXZ = new Vector2(
++                    horizontalTarget.x - transform.position.x,
++                    horizontalTarget.z - transform.position.z
++                ).normalized;
++                targetWasSampled = false;
++                foreach (var lookAheadDistance in new[] { 0.25f, 0.5f, 0.75f }) {
++                    var lookAheadQuery = new Vector3(
++                        horizontalTarget.x + movementXZ.x * lookAheadDistance,
++                        startHit.position.y,
++                        horizontalTarget.z + movementXZ.y * lookAheadDistance
++                    );
++                    NavMeshHit lookAheadHit;
++                    if (!NavMesh.SamplePosition(
++                        lookAheadQuery,
++                        out lookAheadHit,
++                        0.25f,
++                        NavMesh.AllAreas
++                    )) {
++                        continue;
++                    }
++                    var lookAheadDelta = new Vector2(
++                        lookAheadHit.position.x - horizontalTarget.x,
++                        lookAheadHit.position.z - horizontalTarget.z
++                    );
++                    var alongMovement = Vector2.Dot(lookAheadDelta, movementXZ);
++                    var lateralOffset = (
++                        lookAheadDelta - movementXZ * alongMovement
++                    ).magnitude;
++                    if (
++                        alongMovement < -0.05f
++                        || alongMovement > lookAheadDistance + 0.25f
++                        || lateralOffset > 0.3f
++                    ) {
++                        continue;
++                    }
++                    targetHit = lookAheadHit;
++                    hitXZ = new Vector2(targetHit.position.x, targetHit.position.z);
++                    targetWasSampled = true;
++                    break;
++                }
++            }
++            if (!targetWasSampled) {
++                errorMessage = "No schema-2 navmesh surface at or ahead of the movement target.";
++                return false;
++            }
++            float currentPhysicalSurfaceY;
++            float targetPhysicalSurfaceY;
++            var hasCurrentPhysicalSurface = tryGetMultiFloorWalkableSurfaceY(
++                transform.position,
++                out currentPhysicalSurfaceY
++            );
++            var hasTargetPhysicalSurface = tryGetMultiFloorWalkableSurfaceY(
++                horizontalTarget,
++                out targetPhysicalSurfaceY
++            );
++            if (usedLinkLookAhead && !hasTargetPhysicalSurface) {
++                errorMessage =
++                    "Schema-2 link lookahead target has no supporting floor or connector surface.";
++                return false;
++            }
++            var hasPhysicalSurfaceHeights = hasCurrentPhysicalSurface
++                && hasTargetPhysicalSurface;
++            var surfaceHeightDelta = hasPhysicalSurfaceHeights
++                ? targetPhysicalSurfaceY - currentPhysicalSurfaceY
++                : targetHit.position.y - startHit.position.y;
++            if (
++                (!usedLinkLookAhead && Vector2.Distance(targetXZ, hitXZ) > 0.3f)
++                || Mathf.Abs(surfaceHeightDelta)
++                    > horizontalDistance * 0.8f + 0.05f
++            ) {
++                errorMessage = "Schema-2 movement target is not on a continuous local surface.";
++                return false;
++            }
++
++            var path = new NavMeshPath();
++            if (
++                !NavMesh.CalculatePath(
++                    startHit.position,
++                    targetHit.position,
++                    NavMesh.AllAreas,
++                    path
++                )
++                || path.status != NavMeshPathStatus.PathComplete
++            ) {
++                errorMessage = "Schema-2 movement target has no complete navmesh path.";
++                return false;
++            }
++            var pathLength = 0.0f;
++            for (int i = 1; i < path.corners.Length; i++) {
++                pathLength += Vector3.Distance(path.corners[i - 1], path.corners[i]);
++            }
++            if (pathLength > horizontalDistance * 5.0f + 0.1f) {
++                errorMessage = "Schema-2 movement target is not locally adjacent.";
++                return false;
++            }
++
++            projectedTarget = new Vector3(
++                horizontalTarget.x,
++                hasPhysicalSurfaceHeights
++                    ? transform.position.y + surfaceHeightDelta
++                    : targetHit.position.y
++                        + (transform.position.y - startHit.position.y),
++                horizontalTarget.z
++            );
++            return true;
++        }
++
+         // XXX revisit what movement means when we more clearly define what "continuous" movement is
+         protected bool moveInDirection(
+             Vector3 direction,
+@@ -1458,11 +1797,27 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             HashSet<Collider> ignoreColliders = null
+         ) {
+             Vector3 targetPosition = transform.position + direction;
++            Vector3 movementOffset = direction;
++            if (
++                ProceduralTools.ACTIVE_HOUSE_SCHEMA
++                    == ProceduralTools.MULTI_FLOOR_HOUSE_SCHEMA
++                && Mathf.Approximately(direction.y, 0.0f)
++            ) {
++                if (!tryProjectMultiFloorMovementTarget(
++                    targetPosition,
++                    direction.magnitude,
++                    out targetPosition
++                )) {
++                    return false;
++                }
++                movementOffset = targetPosition - transform.position;
++                ignoreColliders = multiFloorMovementIgnoreColliders(ignoreColliders);
++            }
+             if (
+                 checkIfSceneBoundsContainTargetPosition(targetPosition)
+-                && CheckIfItemBlocksAgentMovement(direction, forceAction)
++                && CheckIfItemBlocksAgentMovement(movementOffset, forceAction)
+                 && // forceAction = true allows ignoring movement restrictions caused by held objects
+-                CheckIfAgentCanMove(direction, ignoreColliders)
++                CheckIfAgentCanMove(movementOffset, ignoreColliders)
+             ) {
+                 // only default hand if not manually interacting with things
+                 if (!manualInteract) {
+@@ -7813,6 +8168,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             actionFinished(success: true, actionReturn: Application.persistentDataPath);
+         }
+
++        public void GetSupportedHouseSchemas() {
++            actionFinished(
++                success: true,
++                actionReturn: ProceduralTools.SUPPORTED_HOUSE_SCHEMAS.ToArray()
++            );
++        }
++
+         public void CreateHouse(ProceduralHouse house) {
+             var rooms = house.rooms.SelectMany(room => house.rooms);
+
+@@ -7820,8 +8182,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             var materialIds = new HashSet<string>(
+                 house
+                     .rooms.SelectMany(r =>
+-                        r.ceilings.Select(c => c.material.name)
++                        r.ceilings.Select(c => c.material?.name)
+                             .Concat(new List<string>() { r.floorMaterial.name })
++                            .Concat(
++                                r.floorPolygons == null
++                                    ? Enumerable.Empty<string>()
++                                    : r.floorPolygons.Select(s => s.material?.name)
++                            )
+                             .Concat(house.walls.Select(w => w.material.name))
+                     )
+                     .Concat(new List<string>() { house.proceduralParameters.ceilingMaterial.name })
+@@ -7835,6 +8202,7 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+                         + "Not existing or not loaded to the ProceduralAssetDatabase component."
+                     )
+                 );
++                return;
+             }
+
+             try {
+diff --git a/unity/Assets/Scripts/NavMeshSurfaceExtended.cs b/unity/Assets/Scripts/NavMeshSurfaceExtended.cs
+index c228c05f2..51c06c49c 100644
+--- a/unity/Assets/Scripts/NavMeshSurfaceExtended.cs
++++ b/unity/Assets/Scripts/NavMeshSurfaceExtended.cs
+@@ -297,6 +297,16 @@ public class NavMeshSurfaceExtended : NavMeshSurface {
+             }
+         }
+
++        // Physics-collider collection includes receptacle/visibility trigger
++        // volumes. They are query helpers, not physical walkable geometry, and
++        // baking their top faces creates elevated phantom NavMesh islands.
++        sources.RemoveAll(
++            (source) => {
++                var collider = source.component as Collider;
++                return collider != null && collider.isTrigger;
++            }
++        );
++
+         if (ignoreNavMeshAgent) {
+             sources.RemoveAll(
+                 (x) =>
+diff --git a/unity/Assets/Scripts/ProceduralData.cs b/unity/Assets/Scripts/ProceduralData.cs
+index 8aa95b16b..997023d0c 100644
+--- a/unity/Assets/Scripts/ProceduralData.cs
++++ b/unity/Assets/Scripts/ProceduralData.cs
+@@ -183,6 +183,9 @@ namespace Thor.Procedural.Data {
+     [MessagePackObject(keyAsPropertyName: true)]
+     public class Ceiling {
+         public string id { get; set; }
++        public string floorId { get; set; }
++        public string roomId { get; set; }
++        public string surfaceType { get; set; }
+         public List<Vector3> polygon { get; set; }
+         public MaterialProperties material = new MaterialProperties() {
+             tilingDivisorX = null,
+@@ -190,6 +193,18 @@ namespace Thor.Procedural.Data {
+         };
+     }
+
++    [Serializable]
++    [MessagePackObject(keyAsPropertyName: true)]
++    public class FloorSurface {
++        public string id { get; set; }
++        public string floorId { get; set; }
++        public string roomId { get; set; }
++        public string surfaceType { get; set; }
++        public List<Vector3> polygon { get; set; }
++        public float slabThickness { get; set; }
++        public MaterialProperties material { get; set; }
++    }
++
+     [Serializable]
+     [MessagePackObject(keyAsPropertyName: true)]
+     public class RoomHierarchy {
+@@ -204,10 +219,69 @@ namespace Thor.Procedural.Data {
+
+         // public float y { get; set; }
+         public List<Vector3> floorPolygon { get; set; }
++        // Schema 2 only. floorPolygon remains the semantic room outline while
++        // floorPolygons contains the non-overlapping physical surface pieces.
++        public string floorId { get; set; }
++        public List<FloorSurface> floorPolygons { get; set; }
+         public List<Ceiling> ceilings { get; set; }
+         public List<RoomHierarchy> rooms = null;
+     }
+
++    [Serializable]
++    [MessagePackObject(keyAsPropertyName: true)]
++    public class HouseFloor {
++        public string id { get; set; }
++        public int index { get; set; }
++        public float baseY { get; set; }
++        public float ceilingY { get; set; }
++        public float slabThickness { get; set; }
++        public List<int> roomIds { get; set; } = new List<int>();
++        public Dictionary<string, int> roomIdMap { get; set; } =
++            new Dictionary<string, int>();
++        public List<FloorSurface> floorSurfaces { get; set; } = new List<FloorSurface>();
++        public List<Ceiling> ceilingSurfaces { get; set; } = new List<Ceiling>();
++    }
++
++    [Serializable]
++    [MessagePackObject(keyAsPropertyName: true)]
++    public class ConnectorAssetContract {
++        public float rise { get; set; }
++        public float flightWidth { get; set; }
++        public float flightRun { get; set; }
++        public float reservedWidth { get; set; }
++        public float reservedLength { get; set; }
++        public bool walkableRampCollider { get; set; }
++    }
++
++    [Serializable]
++    [MessagePackObject(keyAsPropertyName: true)]
++    public class ConnectorPolygon {
++        public string id { get; set; }
++        public string floorId { get; set; }
++        public string roomId { get; set; }
++        public string surfaceType { get; set; }
++        public List<Vector3> polygon { get; set; }
++    }
++
++    [Serializable]
++    [MessagePackObject(keyAsPropertyName: true)]
++    public class VerticalConnector {
++        public string id { get; set; }
++        public string connectorType { get; set; }
++        public string assetId { get; set; }
++        public Vector3 position { get; set; }
++        public FlexibleRotation rotation { get; set; }
++        public string lowerFloorId { get; set; }
++        public string upperFloorId { get; set; }
++        public string lowerRoomId { get; set; }
++        public string upperRoomId { get; set; }
++        public ConnectorAssetContract assetContract { get; set; }
++        public List<ConnectorPolygon> landingPolygons { get; set; } =
++            new List<ConnectorPolygon>();
++        public List<ConnectorPolygon> openingPolygons { get; set; } =
++            new List<ConnectorPolygon>();
++    }
++
+     [Serializable]
+     [MessagePackObject(keyAsPropertyName: true)]
+     public class PolygonWall {
+@@ -385,6 +459,9 @@ namespace Thor.Procedural.Data {
+         public ProceduralParameters proceduralParameters { get; set; }
+         public string id { get; set; }
+         public List<RoomHierarchy> rooms { get; set; } = new List<RoomHierarchy>();
++        public List<HouseFloor> floors { get; set; } = new List<HouseFloor>();
++        public List<VerticalConnector> verticalConnectors { get; set; } =
++            new List<VerticalConnector>();
+         public List<PolygonWall> walls { get; set; } = new List<PolygonWall>();
+         public List<Door> doors { get; set; } = new List<Door>();
+         public List<Window> windows { get; set; } = new List<Window>();
+diff --git a/unity/Assets/Scripts/ProceduralTools.cs b/unity/Assets/Scripts/ProceduralTools.cs
+index 9d779f1f8..745d7c22a 100644
+--- a/unity/Assets/Scripts/ProceduralTools.cs
++++ b/unity/Assets/Scripts/ProceduralTools.cs
+@@ -66,6 +66,10 @@ namespace Thor.Procedural {
+
+     public static class ProceduralTools {
+         public const string CURRENT_HOUSE_SCHEMA = "1.0.0";
++        public const string MULTI_FLOOR_HOUSE_SCHEMA = "2.0.0";
++        public static readonly string[] SUPPORTED_HOUSE_SCHEMAS =
++            new string[] { CURRENT_HOUSE_SCHEMA, MULTI_FLOOR_HOUSE_SCHEMA };
++        public static string ACTIVE_HOUSE_SCHEMA { get; private set; } = null;
+
+         public class Rectangle {
+             public Vector3 center;
+@@ -380,6 +384,22 @@ namespace Thor.Procedural {
+             }
+         }
+
++        private static Mesh GenerateWorldSpaceFloorMesh(
++            IEnumerable<Vector3> polygon,
++            bool clockWise = false
++        ) {
++            var points = polygon.ToArray();
++            var mesh = GenerateFloorMesh(points, clockWise: clockWise);
++            var vertices = mesh.vertices;
++            for (int i = 0; i < vertices.Length; i++) {
++                vertices[i].y = points[i].y;
++            }
++            mesh.vertices = vertices;
++            mesh.RecalculateNormals();
++            mesh.RecalculateBounds();
++            return mesh;
++        }
++
+         // TODO triangulation code here
+         public static UnityEngine.Mesh GetPolygonMesh(
+             RoomHierarchy room,
+@@ -1370,6 +1390,1159 @@ namespace Thor.Procedural {
+             }
+         }
+
++        private const float MULTI_FLOOR_EPSILON = 1e-3f;
++
++        private static bool approximately(float a, float b) {
++            return Mathf.Abs(a - b) <= MULTI_FLOOR_EPSILON;
++        }
++
++        private static bool sameNullableFloat(float? first, float? second) {
++            return (!first.HasValue && !second.HasValue)
++                || (
++                    first.HasValue
++                    && second.HasValue
++                    && approximately(first.Value, second.Value)
++                );
++        }
++
++        private static bool sameColor(SerializableColor first, SerializableColor second) {
++            if (first == null || second == null) {
++                return first == null && second == null;
++            }
++            return approximately(first.r, second.r)
++                && approximately(first.g, second.g)
++                && approximately(first.b, second.b)
++                && approximately(first.a, second.a);
++        }
++
++        private static bool sameMaterial(
++            MaterialProperties first,
++            MaterialProperties second
++        ) {
++            if (first == null || second == null) {
++                return first == null && second == null;
++            }
++            return first.name == second.name
++                && first.shader == second.shader
++                && first.unlit == second.unlit
++                && sameColor(first.color, second.color)
++                && sameNullableFloat(first.tilingDivisorX, second.tilingDivisorX)
++                && sameNullableFloat(first.tilingDivisorY, second.tilingDivisorY)
++                && sameNullableFloat(first.metallic, second.metallic)
++                && sameNullableFloat(first.smoothness, second.smoothness);
++        }
++
++        private static bool samePolygon(
++            IList<Vector3> first,
++            IList<Vector3> second
++        ) {
++            if (first == null || second == null || first.Count != second.Count) {
++                return false;
++            }
++            return first.All(point =>
++                second.Any(candidate =>
++                    approximately(point.x, candidate.x)
++                    && approximately(point.y, candidate.y)
++                    && approximately(point.z, candidate.z)
++                )
++            );
++        }
++
++        private static bool sameFloorSurface(FloorSurface first, FloorSurface second) {
++            return first != null
++                && second != null
++                && first.id == second.id
++                && first.floorId == second.floorId
++                && first.roomId == second.roomId
++                && first.surfaceType == second.surfaceType
++                && approximately(first.slabThickness, second.slabThickness)
++                && samePolygon(first.polygon, second.polygon)
++                && sameMaterial(first.material, second.material);
++        }
++
++        private static bool sameCeilingSurface(Ceiling first, Ceiling second) {
++            return first != null
++                && second != null
++                && first.id == second.id
++                && first.floorId == second.floorId
++                && first.roomId == second.roomId
++                && first.surfaceType == second.surfaceType
++                && samePolygon(first.polygon, second.polygon)
++                && sameMaterial(first.material, second.material);
++        }
++
++        private static bool rectanglesOverlap(
++            IList<Vector3> first,
++            IList<Vector3> second
++        ) {
++            var overlapX = Math.Min(first.Max(p => p.x), second.Max(p => p.x))
++                - Math.Max(first.Min(p => p.x), second.Min(p => p.x));
++            var overlapZ = Math.Min(first.Max(p => p.z), second.Max(p => p.z))
++                - Math.Max(first.Min(p => p.z), second.Min(p => p.z));
++            return overlapX > MULTI_FLOOR_EPSILON
++                && overlapZ > MULTI_FLOOR_EPSILON;
++        }
++
++        private static void validateNonOverlappingRectangles(
++            IEnumerable<IList<Vector3>> polygons,
++            string path
++        ) {
++            var values = polygons.ToList();
++            for (int first = 0; first < values.Count; first++) {
++                for (int second = first + 1; second < values.Count; second++) {
++                    if (rectanglesOverlap(values[first], values[second])) {
++                        throw new ArgumentException(
++                            $"{path} contains overlapping physical rectangles."
++                        );
++                    }
++                }
++            }
++        }
++
++        private static void validateOpeningClear(
++            IList<Vector3> opening,
++            IEnumerable<IList<Vector3>> surfaces,
++            string path
++        ) {
++            if (surfaces.Any(surface => rectanglesOverlap(opening, surface))) {
++                throw new ArgumentException(
++                    $"{path} is covered by a physical surface."
++                );
++            }
++        }
++
++        private static void validateRectangleCovered(
++            IList<Vector3> rectangle,
++            IEnumerable<IList<Vector3>> surfaces,
++            string path
++        ) {
++            var minX = rectangle.Min(point => point.x);
++            var maxX = rectangle.Max(point => point.x);
++            var minZ = rectangle.Min(point => point.z);
++            var maxZ = rectangle.Max(point => point.z);
++            var expectedArea = (maxX - minX) * (maxZ - minZ);
++            var coveredArea = surfaces.Sum(surface =>
++                Mathf.Max(
++                    0.0f,
++                    Math.Min(maxX, surface.Max(point => point.x))
++                        - Math.Max(minX, surface.Min(point => point.x))
++                ) * Mathf.Max(
++                    0.0f,
++                    Math.Min(maxZ, surface.Max(point => point.z))
++                        - Math.Max(minZ, surface.Min(point => point.z))
++                )
++            );
++            if (Mathf.Abs(coveredArea - expectedArea) > MULTI_FLOOR_EPSILON) {
++                throw new ArgumentException(
++                    $"{path} must be covered by physical floor surfaces."
++                );
++            }
++        }
++
++        private static List<Vector3> connectorRectangle(
++            Vector3 center,
++            Vector3 right,
++            Vector3 forward,
++            float width,
++            float length
++        ) {
++            var halfRight = right * width / 2.0f;
++            var halfForward = forward * length / 2.0f;
++            return new List<Vector3>() {
++                center - halfRight - halfForward,
++                center + halfRight - halfForward,
++                center + halfRight + halfForward,
++                center - halfRight + halfForward
++            };
++        }
++
++        private static void validateHorizontalRectangle(
++            IList<Vector3> polygon,
++            float expectedY,
++            string path
++        ) {
++            if (polygon == null || polygon.Count != 4) {
++                throw new ArgumentException($"{path} must contain four rectangle vertices.");
++            }
++            var minX = polygon.Min(p => p.x);
++            var maxX = polygon.Max(p => p.x);
++            var minZ = polygon.Min(p => p.z);
++            var maxZ = polygon.Max(p => p.z);
++            if (approximately(minX, maxX) || approximately(minZ, maxZ)) {
++                throw new ArgumentException($"{path} must have positive area.");
++            }
++            foreach (var point in polygon) {
++                if (!approximately(point.y, expectedY)) {
++                    throw new ArgumentException($"{path} must lie at y={expectedY}.");
++                }
++                var onXEdge = approximately(point.x, minX) || approximately(point.x, maxX);
++                var onZEdge = approximately(point.z, minZ) || approximately(point.z, maxZ);
++                if (!onXEdge || !onZEdge) {
++                    throw new ArgumentException($"{path} must be an axis-aligned rectangle.");
++                }
++            }
++            var uniqueCorners = new HashSet<string>(
++                polygon.Select(p => $"{Math.Round(p.x, 4)}:{Math.Round(p.z, 4)}")
++            );
++            if (uniqueCorners.Count != 4) {
++                throw new ArgumentException($"{path} must contain four distinct corners.");
++            }
++        }
++
++        private static void validateRectangleBounds(
++            IList<Vector3> polygon,
++            Vector3 expectedCenter,
++            float expectedSizeX,
++            float expectedSizeZ,
++            string path
++        ) {
++            var minX = polygon.Min(p => p.x);
++            var maxX = polygon.Max(p => p.x);
++            var minZ = polygon.Min(p => p.z);
++            var maxZ = polygon.Max(p => p.z);
++            if (
++                !approximately(minX, expectedCenter.x - expectedSizeX / 2.0f)
++                || !approximately(maxX, expectedCenter.x + expectedSizeX / 2.0f)
++                || !approximately(minZ, expectedCenter.z - expectedSizeZ / 2.0f)
++                || !approximately(maxZ, expectedCenter.z + expectedSizeZ / 2.0f)
++            ) {
++                throw new ArgumentException(
++                    $"{path} does not match its connector transform and contract."
++                );
++            }
++        }
++
++        private static bool validRampSurface(
++            GameObject surface,
++            ConnectorAssetContract contract
++        ) {
++            if (
++                surface == null
++                || !approximately(surface.transform.localPosition.x, 0.0f)
++                || !approximately(surface.transform.localPosition.y, 0.0f)
++                || !approximately(surface.transform.localPosition.z, 0.0f)
++                || Quaternion.Angle(surface.transform.localRotation, Quaternion.identity) > 0.1f
++                || !approximately(surface.transform.localScale.x, 1.0f)
++                || !approximately(surface.transform.localScale.y, 1.0f)
++                || !approximately(surface.transform.localScale.z, 1.0f)
++            ) {
++                return false;
++            }
++            var collider = surface.GetComponent<MeshCollider>();
++            if (
++                collider == null
++                || !collider.enabled
++                || collider.isTrigger
++                || collider.sharedMesh == null
++            ) {
++                return false;
++            }
++            var bounds = collider.sharedMesh.bounds;
++            return approximately(bounds.size.x, contract.flightWidth)
++                && approximately(bounds.size.y, contract.rise)
++                && approximately(bounds.size.z, contract.flightRun)
++                && approximately(bounds.center.x, 0.0f)
++                && approximately(bounds.center.y, contract.rise / 2.0f)
++                && approximately(bounds.center.z, 0.0f);
++        }
++
++        private static bool validLandingSurface(
++            GameObject surface,
++            Transform anchor,
++            GameObject walkableSurface,
++            float expectedWidth,
++            float expectedDepth,
++            float expectedHeight
++        ) {
++            if (
++                surface == null
++                || anchor == null
++                || walkableSurface == null
++                || surface.transform != anchor
++                || surface.transform.parent != walkableSurface.transform
++                || Quaternion.Angle(surface.transform.localRotation, Quaternion.identity) > 0.1f
++                || !approximately(surface.transform.localScale.x, 1.0f)
++                || !approximately(surface.transform.localScale.y, 1.0f)
++                || !approximately(surface.transform.localScale.z, 1.0f)
++            ) {
++                return false;
++            }
++            var collider = surface.GetComponent<BoxCollider>();
++            if (
++                collider == null
++                || !collider.enabled
++                || collider.isTrigger
++                || surface.GetComponentsInChildren<Renderer>(true).Any(r => r.enabled)
++            ) {
++                return false;
++            }
++            var scale = surface.transform.lossyScale;
++            var width = Mathf.Abs(collider.size.x * scale.x);
++            var height = Mathf.Abs(collider.size.y * scale.y);
++            var depth = Mathf.Abs(collider.size.z * scale.z);
++            return approximately(width, expectedWidth)
++                && approximately(height, expectedHeight)
++                && approximately(depth, expectedDepth)
++                && approximately(collider.center.x, 0.0f)
++                && approximately(collider.center.z, 0.0f)
++                && approximately(
++                    collider.center.y + collider.size.y / 2.0f,
++                    0.0f
++                );
++        }
++
++        private static void validateMultiFloorHouse(
++            ProceduralHouse house,
++            AssetMap<GameObject> assetDb
++        ) {
++            if (house.floors == null || house.floors.Count < 2 || house.floors.Count > 3) {
++                throw new ArgumentException("Schema 2 houses must contain two or three floors.");
++            }
++            var floorsById = house.floors.ToDictionary(f => f.id);
++            if (floorsById.Count != house.floors.Count) {
++                throw new ArgumentException("Schema 2 floor ids must be unique.");
++            }
++            for (int index = 0; index < house.floors.Count; index++) {
++                var floor = house.floors.SingleOrDefault(f => f.index == index);
++                if (floor == null) {
++                    throw new ArgumentException("Schema 2 floor indices must be contiguous from zero.");
++                }
++                if (!approximately(floor.baseY, index * 3.0f)) {
++                    throw new ArgumentException($"Floor {floor.id} must have a 3.0 m pitch.");
++                }
++                if (!approximately(floor.ceilingY, floor.baseY + 2.8f)) {
++                    throw new ArgumentException($"Floor {floor.id} must have 2.8 m clear height.");
++                }
++                if (!approximately(floor.slabThickness, 0.2f)) {
++                    throw new ArgumentException($"Floor {floor.id} must use a 0.2 m slab.");
++                }
++            }
++
++            var roomsById = house.rooms.ToDictionary(r => r.id);
++            foreach (var room in house.rooms) {
++                if (String.IsNullOrEmpty(room.floorId) || !floorsById.ContainsKey(room.floorId)) {
++                    throw new ArgumentException($"Room {room.id} references an invalid floorId.");
++                }
++                var floor = floorsById[room.floorId];
++                if (!floor.roomIds.Select(id => $"room|{id}").Contains(room.id)) {
++                    throw new ArgumentException($"Room {room.id} is not listed by floor {floor.id}.");
++                }
++                if (room.floorPolygon == null || room.floorPolygon.Count < 3) {
++                    throw new ArgumentException($"Room {room.id} requires a semantic floorPolygon.");
++                }
++                if (room.floorPolygon.Any(p => !approximately(p.y, floor.baseY))) {
++                    throw new ArgumentException($"Room {room.id} floorPolygon has the wrong y.");
++                }
++                if (room.floorPolygons == null || room.floorPolygons.Count == 0) {
++                    throw new ArgumentException($"Room {room.id} requires physical floorPolygons.");
++                }
++                foreach (var surface in room.floorPolygons) {
++                    if (surface.floorId != floor.id || surface.roomId != room.id || surface.surfaceType != "floor") {
++                        throw new ArgumentException($"Floor surface {surface.id} has inconsistent ownership.");
++                    }
++                    if (!approximately(surface.slabThickness, floor.slabThickness)) {
++                        throw new ArgumentException($"Floor surface {surface.id} has the wrong slab thickness.");
++                    }
++                    validateHorizontalRectangle(surface.polygon, floor.baseY, $"floor surface {surface.id}");
++                }
++                if (room.ceilings == null || room.ceilings.Count == 0) {
++                    throw new ArgumentException($"Room {room.id} requires explicit ceiling surfaces.");
++                }
++                foreach (var surface in room.ceilings) {
++                    if (surface.floorId != floor.id || surface.roomId != room.id || surface.surfaceType != "ceiling") {
++                        throw new ArgumentException($"Ceiling surface {surface.id} has inconsistent ownership.");
++                    }
++                    validateHorizontalRectangle(surface.polygon, floor.ceilingY, $"ceiling surface {surface.id}");
++                }
++            }
++
++            foreach (var floor in house.floors) {
++                if (floor.roomIds == null) {
++                    throw new ArgumentException($"Floor {floor.id} requires room ids.");
++                }
++                var floorRooms = house.rooms.Where(r => r.floorId == floor.id).ToList();
++                var roomIds = new HashSet<string>(floor.roomIds.Select(id => $"room|{id}"));
++                var expectedRoomIds = new HashSet<string>(floorRooms.Select(r => r.id));
++                if (
++                    roomIds.Count != floor.roomIds.Count
++                    || !roomIds.SetEquals(expectedRoomIds)
++                ) {
++                    throw new ArgumentException(
++                        $"Floor {floor.id} room ids disagree with its rooms."
++                    );
++                }
++
++                var expectedFloors = floorRooms.SelectMany(r => r.floorPolygons).ToList();
++                var expectedCeilings = floorRooms.SelectMany(r => r.ceilings).ToList();
++                validateNonOverlappingRectangles(
++                    expectedFloors.Select(surface => surface.polygon),
++                    $"Floor {floor.id} floor surfaces"
++                );
++                validateNonOverlappingRectangles(
++                    expectedCeilings.Select(surface => surface.polygon),
++                    $"Floor {floor.id} ceiling surfaces"
++                );
++
++                if (
++                    floor.floorSurfaces == null
++                    || floor.ceilingSurfaces == null
++                    || expectedFloors.Select(surface => surface.id).Distinct().Count()
++                        != expectedFloors.Count
++                    || expectedCeilings.Select(surface => surface.id).Distinct().Count()
++                        != expectedCeilings.Count
++                    || floor.floorSurfaces.Select(surface => surface.id).Distinct().Count()
++                        != floor.floorSurfaces.Count
++                    || floor.ceilingSurfaces.Select(surface => surface.id).Distinct().Count()
++                        != floor.ceilingSurfaces.Count
++                ) {
++                    throw new ArgumentException(
++                        $"Floor {floor.id} surface ids must be present and unique."
++                    );
++                }
++                var flattenedFloors = floor.floorSurfaces.ToDictionary(surface => surface.id);
++                var flattenedCeilings = floor.ceilingSurfaces.ToDictionary(surface => surface.id);
++                if (
++                    flattenedFloors.Count != expectedFloors.Count
++                    || expectedFloors.Any(surface =>
++                        !flattenedFloors.ContainsKey(surface.id)
++                        || !sameFloorSurface(surface, flattenedFloors[surface.id])
++                    )
++                    || flattenedCeilings.Count != expectedCeilings.Count
++                    || expectedCeilings.Any(surface =>
++                        !flattenedCeilings.ContainsKey(surface.id)
++                        || !sameCeilingSurface(surface, flattenedCeilings[surface.id])
++                    )
++                ) {
++                    throw new ArgumentException(
++                        $"Floor {floor.id} flattened surfaces disagree with its rooms."
++                    );
++                }
++            }
++
++            if (house.verticalConnectors == null
++                || house.verticalConnectors.Count != house.floors.Count - 1) {
++                throw new ArgumentException("Schema 2 requires one connector per adjacent floor pair.");
++            }
++            var connectorIds = new HashSet<string>();
++            var connectorLowerFloorIndices = new HashSet<int>();
++            foreach (var connector in house.verticalConnectors) {
++                if (!connectorIds.Add(connector.id) || connector.connectorType != "stairs") {
++                    throw new ArgumentException("Schema 2 connector ids must be unique and type 'stairs'.");
++                }
++                if (!floorsById.ContainsKey(connector.lowerFloorId)
++                    || !floorsById.ContainsKey(connector.upperFloorId)
++                    || floorsById[connector.upperFloorId].index
++                        != floorsById[connector.lowerFloorId].index + 1) {
++                    throw new ArgumentException($"Connector {connector.id} must join adjacent floors.");
++                }
++                var lowerFloorIndex = floorsById[connector.lowerFloorId].index;
++                if (!connectorLowerFloorIndices.Add(lowerFloorIndex)) {
++                    throw new ArgumentException(
++                        "Schema 2 requires exactly one connector for each adjacent floor pair."
++                    );
++                }
++                if (!roomsById.ContainsKey(connector.lowerRoomId)
++                    || !roomsById.ContainsKey(connector.upperRoomId)
++                    || roomsById[connector.lowerRoomId].floorId != connector.lowerFloorId
++                    || roomsById[connector.upperRoomId].floorId != connector.upperFloorId) {
++                    throw new ArgumentException($"Connector {connector.id} has invalid host rooms.");
++                }
++                if (connector.rotation == null || connector.assetContract == null
++                    || connector.landingPolygons == null || connector.landingPolygons.Count != 2
++                    || connector.openingPolygons == null || connector.openingPolygons.Count != 2) {
++                    throw new ArgumentException($"Connector {connector.id} is missing geometry metadata.");
++                }
++                var contract = connector.assetContract;
++                if (!approximately(contract.rise, 3.0f)
++                    || !approximately(contract.flightWidth, 1.0f)
++                    || !approximately(contract.flightRun, 4.5f)
++                    || !approximately(contract.reservedWidth, 1.2f)
++                    || !approximately(contract.reservedLength, 6.5f)
++                    || !contract.walkableRampCollider) {
++                    throw new ArgumentException($"Connector {connector.id} has an unsupported asset contract.");
++                }
++
++                var lowerFloor = floorsById[connector.lowerFloorId];
++                var upperFloor = floorsById[connector.upperFloorId];
++                var connectorRotation = connector.rotation.toQuaternion();
++                var up = connectorRotation * Vector3.up;
++                var right = connectorRotation * Vector3.right;
++                var forward = connectorRotation * Vector3.forward;
++                var axisAligned = (
++                    approximately(Mathf.Abs(forward.x), 1.0f)
++                    && approximately(Mathf.Abs(forward.z), 0.0f)
++                ) || (
++                    approximately(Mathf.Abs(forward.x), 0.0f)
++                    && approximately(Mathf.Abs(forward.z), 1.0f)
++                );
++                if (
++                    !approximately(connector.position.y, lowerFloor.baseY)
++                    || Vector3.Distance(up, Vector3.up) > MULTI_FLOOR_EPSILON
++                    || !axisAligned
++                ) {
++                    throw new ArgumentException(
++                        $"Connector {connector.id} must use its lower-floor base and an axis-aligned yaw."
++                    );
++                }
++
++                var lowerLandingCount = connector.landingPolygons.Count(landing =>
++                    landing.floorId == connector.lowerFloorId
++                    && landing.roomId == connector.lowerRoomId
++                );
++                var upperLandingCount = connector.landingPolygons.Count(landing =>
++                    landing.floorId == connector.upperFloorId
++                    && landing.roomId == connector.upperRoomId
++                );
++                var lowerOpeningCount = connector.openingPolygons.Count(opening =>
++                    opening.floorId == connector.lowerFloorId
++                    && opening.surfaceType == "ceiling"
++                );
++                var upperOpeningCount = connector.openingPolygons.Count(opening =>
++                    opening.floorId == connector.upperFloorId
++                    && opening.surfaceType == "floor"
++                );
++                if (
++                    lowerLandingCount != 1
++                    || upperLandingCount != 1
++                    || lowerOpeningCount != 1
++                    || upperOpeningCount != 1
++                ) {
++                    throw new ArgumentException(
++                        $"Connector {connector.id} must describe exactly its lower and upper landings/openings."
++                    );
++                }
++                var lowerOpening = connector.openingPolygons.Single(opening =>
++                    opening.floorId == connector.lowerFloorId
++                    && opening.surfaceType == "ceiling"
++                );
++                var upperOpening = connector.openingPolygons.Single(opening =>
++                    opening.floorId == connector.upperFloorId
++                    && opening.surfaceType == "floor"
++                );
++                var lowerLanding = connector.landingPolygons.Single(landing =>
++                    landing.floorId == connector.lowerFloorId
++                );
++                var upperLanding = connector.landingPolygons.Single(landing =>
++                    landing.floorId == connector.upperFloorId
++                );
++
++                var landingDepth = (contract.reservedLength - contract.flightRun) / 2.0f;
++                var landingCenterZ = (contract.reservedLength - landingDepth) / 2.0f;
++                var landingSizeX = Mathf.Abs(right.x) * contract.reservedWidth
++                    + Mathf.Abs(forward.x) * landingDepth;
++                var landingSizeZ = Mathf.Abs(right.z) * contract.reservedWidth
++                    + Mathf.Abs(forward.z) * landingDepth;
++                var openingSizeX = Mathf.Abs(right.x) * contract.reservedWidth
++                    + Mathf.Abs(forward.x) * contract.reservedLength;
++                var openingSizeZ = Mathf.Abs(right.z) * contract.reservedWidth
++                    + Mathf.Abs(forward.z) * contract.reservedLength;
++                foreach (var landing in connector.landingPolygons) {
++                    if (!floorsById.ContainsKey(landing.floorId)
++                        || !roomsById.ContainsKey(landing.roomId)
++                        || roomsById[landing.roomId].floorId != landing.floorId) {
++                        throw new ArgumentException($"Connector landing {landing.id} has invalid ownership.");
++                    }
++                    validateHorizontalRectangle(
++                        landing.polygon,
++                        floorsById[landing.floorId].baseY,
++                        $"connector landing {landing.id}"
++                    );
++                    var isLower = landing.floorId == connector.lowerFloorId;
++                    var localCenter = new Vector3(
++                        0.0f,
++                        isLower ? 0.0f : contract.rise,
++                        isLower ? -landingCenterZ : landingCenterZ
++                    );
++                    validateRectangleBounds(
++                        landing.polygon,
++                        connector.position + connectorRotation * localCenter,
++                        landingSizeX,
++                        landingSizeZ,
++                        $"connector landing {landing.id}"
++                    );
++                }
++                foreach (var opening in connector.openingPolygons) {
++                    if (!floorsById.ContainsKey(opening.floorId)
++                        || (opening.surfaceType != "floor" && opening.surfaceType != "ceiling")) {
++                        throw new ArgumentException($"Connector opening {opening.id} is invalid.");
++                    }
++                    var openingFloor = floorsById[opening.floorId];
++                    var openingY = opening.surfaceType == "floor"
++                        ? openingFloor.baseY
++                        : openingFloor.ceilingY;
++                    validateHorizontalRectangle(
++                        opening.polygon,
++                        openingY,
++                        $"connector opening {opening.id}"
++                    );
++                }
++                validateRectangleBounds(
++                    lowerOpening.polygon,
++                    new Vector3(
++                        connector.position.x,
++                        lowerFloor.ceilingY,
++                        connector.position.z
++                    ),
++                    openingSizeX,
++                    openingSizeZ,
++                    $"connector opening {lowerOpening.id}"
++                );
++                var upperFloorOpeningCenter = new Vector3(
++                    connector.position.x,
++                    upperFloor.baseY,
++                    connector.position.z
++                );
++                validateRectangleBounds(
++                    upperOpening.polygon,
++                    upperFloorOpeningCenter,
++                    openingSizeX,
++                    openingSizeZ,
++                    $"connector opening {upperOpening.id}"
++                );
++                var lowerFloorRooms = house.rooms.Where(room =>
++                    room.floorId == connector.lowerFloorId
++                );
++                var upperFloorRooms = house.rooms.Where(room =>
++                    room.floorId == connector.upperFloorId
++                );
++                var lowerFloorOpeningCenter = new Vector3(
++                    connector.position.x,
++                    lowerFloor.baseY,
++                    connector.position.z
++                );
++                var lowerFloorOpening = connectorRectangle(
++                    lowerFloorOpeningCenter,
++                    right,
++                    forward,
++                    contract.reservedWidth,
++                    contract.reservedLength
++                );
++                validateOpeningClear(
++                    lowerFloorOpening,
++                    lowerFloorRooms.SelectMany(room => room.floorPolygons)
++                        .Select(surface => surface.polygon),
++                    $"Connector {connector.id} lower-floor opening"
++                );
++                validateOpeningClear(
++                    lowerOpening.polygon,
++                    lowerFloorRooms.SelectMany(room => room.ceilings)
++                        .Select(surface => surface.polygon),
++                    $"Connector {connector.id} lower-ceiling opening"
++                );
++                validateOpeningClear(
++                    upperOpening.polygon,
++                    upperFloorRooms.SelectMany(room => room.floorPolygons)
++                        .Select(surface => surface.polygon),
++                    $"Connector {connector.id} upper-floor opening"
++                );
++                if (!assetDb.ContainsKey(connector.assetId)) {
++                    throw new ArgumentException($"Connector asset '{connector.assetId}' is not in the asset database.");
++                }
++                var prefab = assetDb.getAsset(connector.assetId);
++                var marker = prefab.GetComponent<VerticalConnectorAsset>();
++                if (marker == null || marker.connectorType != connector.connectorType
++                    || !approximately(prefab.transform.localScale.x, 1.0f)
++                    || !approximately(prefab.transform.localScale.y, 1.0f)
++                    || !approximately(prefab.transform.localScale.z, 1.0f)
++                    || !validRampSurface(marker.walkableSurface, contract)
++                    || marker.walkableSurface.transform.parent != prefab.transform
++                    || marker.lowerLandingAnchor == null
++                    || marker.upperLandingAnchor == null
++                    || !approximately(marker.lowerLandingAnchor.localPosition.x, 0.0f)
++                    || !approximately(marker.lowerLandingAnchor.localPosition.y, 0.0f)
++                    || !approximately(marker.lowerLandingAnchor.localPosition.z, -landingCenterZ)
++                    || !approximately(marker.upperLandingAnchor.localPosition.x, 0.0f)
++                    || !approximately(marker.upperLandingAnchor.localPosition.y, contract.rise)
++                    || !approximately(marker.upperLandingAnchor.localPosition.z, landingCenterZ)
++                    || !validLandingSurface(
++                        marker.lowerLandingSurface,
++                        marker.lowerLandingAnchor,
++                        marker.walkableSurface,
++                        contract.reservedWidth,
++                        landingDepth,
++                        lowerFloor.slabThickness
++                    )
++                    || !validLandingSurface(
++                        marker.upperLandingSurface,
++                        marker.upperLandingAnchor,
++                        marker.walkableSurface,
++                        contract.reservedWidth,
++                        landingDepth,
++                        upperFloor.slabThickness
++                    )
++                    || marker.walkableSurface
++                        .GetComponentsInChildren<Renderer>(true)
++                        .Any(r => r.enabled)
++                    || !approximately(marker.referenceRise, contract.rise)
++                    || !approximately(marker.referenceRun, contract.flightRun)
++                    || !approximately(marker.referenceWidth, contract.flightWidth)
++                    || !approximately(marker.reservedEnvelopeWidth, contract.reservedWidth)
++                    || !approximately(marker.reservedEnvelopeLength, contract.reservedLength)) {
++                    throw new ArgumentException($"Connector asset '{connector.assetId}' does not satisfy its contract.");
++                }
++            }
++            for (int index = 0; index < house.floors.Count - 1; index++) {
++                if (!connectorLowerFloorIndices.Contains(index)) {
++                    throw new ArgumentException(
++                        $"Schema 2 requires a connector from floor {index} "
++                        + $"to floor {index + 1}."
++                    );
++                }
++            }
++        }
++
++        private static Mesh createConnectedStairWalkableMesh(
++            ConnectorAssetContract contract
++        ) {
++            var halfFlightWidth = contract.flightWidth / 2.0f;
++            var halfLandingWidth = contract.reservedWidth / 2.0f;
++            var halfRun = contract.flightRun / 2.0f;
++            var halfEnvelope = contract.reservedLength / 2.0f;
++            var mesh = new Mesh() {
++                name = "ConnectedStairLandingRampCollider"
++            };
++            mesh.vertices = new Vector3[] {
++                new Vector3(-halfLandingWidth, 0.0f, -halfEnvelope),
++                new Vector3(halfLandingWidth, 0.0f, -halfEnvelope),
++                new Vector3(-halfFlightWidth, 0.0f, -halfRun),
++                new Vector3(halfFlightWidth, 0.0f, -halfRun),
++                new Vector3(-halfFlightWidth, contract.rise, halfRun),
++                new Vector3(halfFlightWidth, contract.rise, halfRun),
++                new Vector3(-halfLandingWidth, contract.rise, halfEnvelope),
++                new Vector3(halfLandingWidth, contract.rise, halfEnvelope)
++            };
++            mesh.triangles = new int[] {
++                0, 2, 1,
++                1, 2, 3,
++                2, 4, 3,
++                3, 4, 5,
++                4, 6, 5,
++                5, 6, 7
++            };
++            mesh.RecalculateNormals();
++            mesh.RecalculateBounds();
++            return mesh;
++        }
++
++        private static GameObject spawnVerticalConnectors(
++            IEnumerable<VerticalConnector> connectors,
++            GameObject structureRoot
++        ) {
++            var parent = new GameObject("VerticalConnectors");
++            parent.transform.parent = structureRoot.transform;
++            var assetDb = getAssetMap();
++            foreach (var connector in connectors) {
++                var instance = UnityEngine.Object.Instantiate(assetDb.getAsset(connector.assetId));
++                instance.name = connector.id;
++                instance.transform.position = connector.position;
++                instance.transform.rotation = connector.rotation.toQuaternion();
++                var structure = instance.GetComponent<StructureObject>();
++                if (structure == null) {
++                    structure = instance.AddComponent<StructureObject>();
++                }
++                structure.WhatIsMyStructureObjectTag = StructureObjectTag.Stairs;
++                var marker = instance.GetComponent<VerticalConnectorAsset>();
++                var walkableCollider = marker.walkableSurface.GetComponent<MeshCollider>();
++                walkableCollider.sharedMesh = null;
++                walkableCollider.sharedMesh = createConnectedStairWalkableMesh(
++                    connector.assetContract
++                );
++                var walkableStructure = marker.walkableSurface.GetComponent<StructureObject>();
++                if (walkableStructure == null) {
++                    walkableStructure = marker.walkableSurface.AddComponent<StructureObject>();
++                }
++                walkableStructure.WhatIsMyStructureObjectTag = StructureObjectTag.Stairs;
++                foreach (
++                    var landing in new[] {
++                        marker.lowerLandingSurface,
++                        marker.upperLandingSurface
++                    }
++                ) {
++                    var landingStructure = landing.GetComponent<StructureObject>();
++                    if (landingStructure == null) {
++                        landingStructure = landing.AddComponent<StructureObject>();
++                    }
++                    landingStructure.WhatIsMyStructureObjectTag = StructureObjectTag.Stairs;
++                }
++                SetLayer<Collider>(instance, LayerMask.NameToLayer("Procedural0"));
++                tagObjectNavmesh(instance, "Not Walkable");
++                tagObjectNavmesh(marker.walkableSurface, "Walkable");
++                tagObjectNavmesh(marker.lowerLandingSurface, ignore: true);
++                tagObjectNavmesh(marker.upperLandingSurface, ignore: true);
++                instance.transform.parent = parent.transform;
++            }
++            return parent;
++        }
++
++        private static bool isVerticalConnectorWalkableCollider(Collider collider) {
++            var connector = collider.GetComponentInParent<VerticalConnectorAsset>();
++            if (connector == null) {
++                return false;
++            }
++            foreach (
++                var surface in new[] {
++                    connector.walkableSurface,
++                    connector.lowerLandingSurface,
++                    connector.upperLandingSurface
++                }
++            ) {
++                if (
++                    surface != null
++                    && (
++                        collider.gameObject == surface
++                        || collider.transform.IsChildOf(surface.transform)
++                    )
++                ) {
++                    return true;
++                }
++            }
++            return false;
++        }
++
++        private static bool verticalConnectorLinkCorridorIsClear(
++            Vector3 start,
++            Vector3 end,
++            NavMeshBuildSettings buildSettings
++        ) {
++            var horizontalDelta = new Vector3(end.x - start.x, 0.0f, end.z - start.z);
++            var distance = horizontalDelta.magnitude;
++            if (distance <= MULTI_FLOOR_EPSILON) {
++                return false;
++            }
++
++            var radius = Mathf.Max(0.05f, buildSettings.agentRadius);
++            var height = Mathf.Max(radius * 2.0f, buildSettings.agentHeight);
++            var baseY = Mathf.Max(start.y, end.y) + 0.05f;
++            var lower = new Vector3(start.x, baseY + radius, start.z);
++            var upper = new Vector3(start.x, baseY + height - radius, start.z);
++            var layerMask = ~LayerMask.GetMask("Agent", "SimObjInvisible");
++            foreach (
++                var hit in Physics.CapsuleCastAll(
++                    lower,
++                    upper,
++                    radius,
++                    horizontalDelta / distance,
++                    distance,
++                    layerMask,
++                    QueryTriggerInteraction.Ignore
++                )
++            ) {
++                if (isVerticalConnectorWalkableCollider(hit.collider)) {
++                    continue;
++                }
++                var structure = hit.collider.GetComponentInParent<StructureObject>();
++                if (
++                    structure != null
++                    && structure.WhatIsMyStructureObjectTag == StructureObjectTag.Floor
++                ) {
++                    continue;
++                }
++                return false;
++            }
++            return true;
++        }
++
++        private static void addVerticalConnectorNavMeshLinks(
++            IEnumerable<VerticalConnector> connectors
++        ) {
++            var navMeshSurfaces = GameObject.FindObjectsOfType<NavMeshSurfaceExtended>()
++                .Where(surface => surface.isActiveAndEnabled)
++                .ToArray();
++            var agentTypeIds = navMeshSurfaces
++                .Select(surface => surface.agentTypeID)
++                .Distinct()
++                .ToArray();
++            if (agentTypeIds.Length == 0) {
++                throw new InvalidOperationException(
++                    "Cannot connect vertical connectors because no active NavMesh surfaces exist."
++                );
++            }
++            foreach (var connector in connectors) {
++                var instance = GameObject.Find(connector.id);
++                var marker = instance.GetComponent<VerticalConnectorAsset>();
++                var forward = connector.rotation.toQuaternion() * Vector3.forward;
++                var right = connector.rotation.toQuaternion() * Vector3.right;
++                var landingDepth = (
++                    connector.assetContract.reservedLength
++                    - connector.assetContract.flightRun
++                ) / 2.0f;
++                var landingCenterOffset = (
++                    connector.assetContract.reservedLength - landingDepth
++                ) / 2.0f;
++                foreach (var upper in new[] { false, true }) {
++                    var elevation = connector.position.y
++                        + (upper ? connector.assetContract.rise : 0.0f);
++                    var landingCenter = connector.position
++                        + (upper ? 1.0f : -1.0f) * forward * landingCenterOffset;
++                    landingCenter.y = elevation;
++                    foreach (var agentTypeId in agentTypeIds) {
++                        var agentBuildSettings = navMeshSurfaces
++                            .First(surface => surface.agentTypeID == agentTypeId)
++                            .buildSettings;
++                        var queryFilter = new NavMeshQueryFilter() {
++                            agentTypeID = agentTypeId,
++                            areaMask = NavMesh.AllAreas
++                        };
++                        var sampledLinkCount = 0;
++                        var stairSampleCount = 0;
++                        var roomSampleCount = 0;
++                        var candidateCount = 0;
++                        foreach (var sideSign in new[] { -1.0f, 1.0f }) {
++                            var outward = sideSign * right;
++                            foreach (var landingOffset in new[] { -0.25f, 0.0f, 0.25f }) {
++                                var boundary = landingCenter
++                                    + forward * landingOffset
++                                    + outward * connector.assetContract.reservedWidth / 2.0f;
++                                var stairQuery = boundary - outward * 0.3f;
++                                foreach (var roomOffset in new[] { 0.3f, 0.55f, 0.8f }) {
++                                    var roomQuery = boundary + outward * roomOffset;
++                                    NavMeshHit stairHit;
++                                    NavMeshHit roomHit;
++                                    var stairSampled = NavMesh.SamplePosition(
++                                        stairQuery,
++                                        out stairHit,
++                                        0.25f,
++                                        queryFilter
++                                    );
++                                    var roomSampled = NavMesh.SamplePosition(
++                                        roomQuery,
++                                        out roomHit,
++                                        0.25f,
++                                        queryFilter
++                                    );
++                                    candidateCount++;
++                                    if (stairSampled) {
++                                        stairSampleCount++;
++                                    }
++                                    if (roomSampled) {
++                                        roomSampleCount++;
++                                    }
++                                    if (!stairSampled || !roomSampled) {
++                                        continue;
++                                    }
++                                    if (!verticalConnectorLinkCorridorIsClear(
++                                        stairHit.position,
++                                        roomHit.position,
++                                        agentBuildSettings
++                                    )) {
++                                        continue;
++                                    }
++                                    marker.AddRuntimeNavMeshLink(
++                                        new NavMeshLinkData() {
++                                            startPosition = stairHit.position,
++                                            endPosition = roomHit.position,
++                                            width = 0.0f,
++                                            costModifier = -1.0f,
++                                            bidirectional = true,
++                                            area = NavMesh.GetAreaFromName("Walkable"),
++                                            agentTypeID = agentTypeId
++                                        }
++                                    );
++                                    sampledLinkCount++;
++                                    break;
++                                }
++                            }
++                        }
++                        var endOutward = (upper ? 1.0f : -1.0f) * forward;
++                        var endBoundaryCenter = connector.position
++                            + endOutward * connector.assetContract.reservedLength / 2.0f;
++                        endBoundaryCenter.y = elevation;
++                        foreach (var landingOffset in new[] { -0.3f, 0.0f, 0.3f }) {
++                            var boundary = endBoundaryCenter + right * landingOffset;
++                            var stairQuery = boundary - endOutward * 0.3f;
++                            foreach (var roomOffset in new[] { 0.3f, 0.55f, 0.8f }) {
++                                var roomQuery = boundary + endOutward * roomOffset;
++                                NavMeshHit stairHit;
++                                NavMeshHit roomHit;
++                                var stairSampled = NavMesh.SamplePosition(
++                                    stairQuery,
++                                    out stairHit,
++                                    0.25f,
++                                    queryFilter
++                                );
++                                var roomSampled = NavMesh.SamplePosition(
++                                    roomQuery,
++                                    out roomHit,
++                                    0.25f,
++                                    queryFilter
++                                );
++                                candidateCount++;
++                                if (stairSampled) {
++                                    stairSampleCount++;
++                                }
++                                if (roomSampled) {
++                                    roomSampleCount++;
++                                }
++                                if (!stairSampled || !roomSampled) {
++                                    continue;
++                                }
++                                if (!verticalConnectorLinkCorridorIsClear(
++                                    stairHit.position,
++                                    roomHit.position,
++                                    agentBuildSettings
++                                )) {
++                                    continue;
++                                }
++                                marker.AddRuntimeNavMeshLink(
++                                    new NavMeshLinkData() {
++                                        startPosition = stairHit.position,
++                                        endPosition = roomHit.position,
++                                        width = 0.0f,
++                                        costModifier = -1.0f,
++                                        bidirectional = true,
++                                        area = NavMesh.GetAreaFromName("Walkable"),
++                                        agentTypeID = agentTypeId
++                                    }
++                                );
++                                sampledLinkCount++;
++                                break;
++                            }
++                        }
++                        if (sampledLinkCount == 0) {
++                            throw new InvalidOperationException(
++                                $"Connector '{connector.id}' has no sampled NavMesh pair "
++                                + $"across an exposed {(upper ? "upper" : "lower")} landing edge "
++                                + $"boundary for agent type {agentTypeId} "
++                                + $"(stair samples {stairSampleCount}/{candidateCount}, "
++                                + $"room samples {roomSampleCount}/{candidateCount})."
++                            );
++                        }
++                    }
++                }
++            }
++        }
++
++        private static void createMultiFloorRoomSurfaces(
++            ProceduralHouse house,
++            AssetMap<Material> materialDb,
++            GameObject floorRoot,
++            float receptacleHeight
++        ) {
++            foreach (var room in house.rooms) {
++                var roomObject = createSimObjPhysicsGameObject(room.id);
++                var roomVisibilityPoints = new GameObject("VisibilityPoints");
++                var roomColliders = new List<Collider>();
++                var roomReceptacles = new List<GameObject>();
++
++                for (int surfaceIndex = 0; surfaceIndex < room.floorPolygons.Count; surfaceIndex++) {
++                    var surface = room.floorPolygons[surfaceIndex];
++                    var surfaceObject = createSimObjPhysicsGameObject(
++                        surface.id,
++                        withRigidBody: false
++                    );
++                    var floorStructure = surfaceObject.AddComponent<StructureObject>();
++                    floorStructure.WhatIsMyStructureObjectTag = StructureObjectTag.Floor;
++                    var mesh = GenerateWorldSpaceFloorMesh(surface.polygon);
++                    surfaceObject.GetComponent<MeshFilter>().mesh = mesh;
++                    var materialProperties = surface.material ?? room.floorMaterial;
++                    var materialId = !String.IsNullOrEmpty(materialProperties.name)
++                        ? materialProperties.name
++                        : room.floorMaterial.name;
++                    surfaceObject.GetComponent<MeshRenderer>().material = generatePolygonMaterial(
++                        sharedMaterial: materialDb.getAsset(materialId),
++                        materialProperties: materialProperties,
++                        dimensions: getAxisAlignedWidthDepth(surface.polygon),
++                        squareTiling: house.proceduralParameters.squareTiling
++                    );
++
++                    var raycastCollider = surfaceObject.AddComponent<MeshCollider>();
++                    raycastCollider.sharedMesh = mesh;
++                    surfaceObject.layer = 12;
++
++                    var bounds = getRoomRectangle(surface.polygon);
++                    var dimension = bounds.max - bounds.min;
++                    var rectangle = new Rectangle() {
++                        center = bounds.min + dimension / 2.0f,
++                        width = dimension.x,
++                        depth = dimension.z
++                    };
++                    createFloorCollider(surfaceObject, rectangle, surface.slabThickness);
++                    var receptacle = createFloorReceptacle(
++                        surfaceObject,
++                        rectangle,
++                        receptacleHeight,
++                        namePostfix: $"_{surfaceIndex}"
++                    );
++                    roomReceptacles.Add(receptacle);
++                    roomColliders.AddRange(
++                        surfaceObject.GetComponentsInChildren<Collider>().Where(c => !c.isTrigger)
++                    );
++
++                    var interval = 1 / 3.0f;
++                    var visibilityPoints = Enumerable
++                        .Range(0, mesh.triangles.Length / 3)
++                        .Select(triangleIndex =>
++                            mesh.triangles.Skip(triangleIndex * 3)
++                                .Take(3)
++                                .Select(vertexIndex => mesh.vertices[vertexIndex])
++                        )
++                        .SelectMany(vertices =>
++                            GenerateTriangleVisibilityPoints(
++                                vertices.ElementAt(0),
++                                vertices.ElementAt(1),
++                                vertices.ElementAt(2),
++                                interval
++                            )
++                        );
++                    var surfaceVisibility = CreateVisibilityPointsGameObject(visibilityPoints);
++                    surfaceVisibility.transform.parent = roomVisibilityPoints.transform;
++                    surfaceObject.transform.parent = roomObject.transform;
++                }
++
++                if (!String.IsNullOrEmpty(room.layer)) {
++                    SetLayer<MeshRenderer>(roomObject, LayerMask.NameToLayer(room.layer));
++                }
++                roomObject.transform.parent = floorRoot.transform;
++                setRoomSimObjectPhysics(
++                    roomObject,
++                    room.id,
++                    roomVisibilityPoints,
++                    roomReceptacles.ToArray(),
++                    roomColliders.ToArray()
++                );
++                setRoomProperties(roomObject, room);
++            }
++        }
++
++        private static GameObject createMultiFloorCeilings(
++            ProceduralHouse house,
++            AssetMap<Material> materialDb
++        ) {
++            var parent = new GameObject(DefaultCeilingRootObjectName);
++            foreach (var room in house.rooms) {
++                foreach (var surface in room.ceilings) {
++                    var mesh = GenerateWorldSpaceFloorMesh(surface.polygon, clockWise: true);
++                    var ceilingObject = createSimObjPhysicsGameObject(
++                        surface.id,
++                        Vector3.zero,
++                        "Structure",
++                        0,
++                        withRigidBody: false
++                    );
++                    var structure = ceilingObject.AddComponent<StructureObject>();
++                    structure.WhatIsMyStructureObjectTag = StructureObjectTag.Ceiling;
++                    ceilingObject.GetComponent<MeshFilter>().mesh = mesh;
++                    var properties = surface.material ?? house.proceduralParameters.ceilingMaterial;
++                    var materialId = !String.IsNullOrEmpty(properties.name)
++                        ? properties.name
++                        : house.proceduralParameters.ceilingMaterial.name;
++                    ceilingObject.GetComponent<MeshRenderer>().material = generatePolygonMaterial(
++                        materialDb.getAsset(materialId),
++                        getAxisAlignedWidthDepth(surface.polygon),
++                        properties,
++                        squareTiling: house.proceduralParameters.squareTiling
++                    );
++                    ceilingObject.GetComponent<MeshRenderer>().shadowCastingMode =
++                        UnityEngine.Rendering.ShadowCastingMode.TwoSided;
++                    var collider = ceilingObject.AddComponent<MeshCollider>();
++                    collider.sharedMesh = mesh;
++                    tagObjectNavmesh(ceilingObject, "Not Walkable");
++                    ceilingObject.transform.parent = parent.transform;
++                }
++            }
++            return parent;
++        }
++
+         public static GameObject CreateHouse(
+             ProceduralHouse house,
+             AssetMap<Material> materialDb,
+@@ -1394,14 +2567,18 @@ namespace Thor.Procedural {
+             var schema = parseHouseVersion(house.metadata?.schema);
+             var latestSchema = parseHouseVersion(CURRENT_HOUSE_SCHEMA);
+             var versionCompare = compareVersion(schema, latestSchema);
++            var isMultiFloor = house.metadata.schema == MULTI_FLOOR_HOUSE_SCHEMA;
+
+-            if (versionCompare != 0) {
++            if (!isMultiFloor && versionCompare != 0) {
+                 var message =
+                     versionCompare < 0
+                         ? $"Incompatible house schema version '{schema}', please upgrade to latest '{latestSchema}' using the 'procthor' package's 'scripts/upgrade_house.py'."
+                         : $"Invalid house version: '{schema}'. Supported version: '{latestSchema}'";
+                 throw new ArgumentException(message, "house.version");
+             }
++            if (isMultiFloor) {
++                validateMultiFloorHouse(house, getAssetMap());
++            }
+
+             string simObjId = !String.IsNullOrEmpty(house.id)
+                 ? house.id
+@@ -1435,12 +2612,22 @@ namespace Thor.Procedural {
+             var wallsMaxY = wallPoints.Count() > 0 ? wallPoints.Max(p => p.y) : 0.0f;
+             var wallsMaxHeight = walls.Count() > 0 ? walls.Max(w => w.height) : 0.0f;
+
+-            var floorGameObject = createSimObjPhysicsGameObject(
+-                simObjId,
+-                position == null ? new Vector3(0, wallsMinY, 0) : position,
+-                withRigidBody: false
+-            );
++            var floorGameObject = isMultiFloor
++                ? new GameObject(simObjId)
++                : createSimObjPhysicsGameObject(
++                    simObjId,
++                    position == null ? new Vector3(0, wallsMinY, 0) : position,
++                    withRigidBody: false
++                );
+
++            if (isMultiFloor) {
++                createMultiFloorRoomSurfaces(
++                    house,
++                    materialDb,
++                    floorGameObject,
++                    receptacleHeight
++                );
++            } else {
+             for (int i = 0; i < house.rooms.Count(); i++) {
+                 var room = house.rooms.ElementAt(i);
+                 var subFloorGO = createSimObjPhysicsGameObject(room.id);
+@@ -1534,6 +2721,7 @@ namespace Thor.Procedural {
+                 receptacleTriggerBox,
+                 collider.GetComponentInChildren<Collider>()
+             );
++            }
+
+             var structureGO = new GameObject(DefaultRootStructureObjectName);
+
+@@ -1548,7 +2736,10 @@ namespace Thor.Procedural {
+             wallsGO.transform.parent = structureGO.transform;
+
+             // generate ceiling
+-            if (ceilingMaterialId != "") {
++            if (isMultiFloor) {
++                createMultiFloorCeilings(house, materialDb).transform.parent =
++                    structureGO.transform;
++            } else if (ceilingMaterialId != "") {
+                 var ceilingParent = new GameObject(DefaultCeilingRootObjectName);
+
+                 // OLD rectangular ceiling, may be usefull to have as a feature, much faster
+@@ -1614,6 +2805,10 @@ namespace Thor.Procedural {
+                 ceilingParent.transform.parent = structureGO.transform;
+             }
+
++            if (isMultiFloor) {
++                spawnVerticalConnectors(house.verticalConnectors, structureGO);
++            }
++
+             CollisionDetectionMode collDet = CollisionDetectionMode.ContinuousSpeculative;
+             if (!string.IsNullOrEmpty(house.proceduralParameters.collisionDetectionMode)) {
+                 Enum.TryParse(house.proceduralParameters.collisionDetectionMode, true, out collDet);
+@@ -1753,7 +2948,24 @@ namespace Thor.Procedural {
+                 }
+             }
+
+-            buildNavMeshes(floorGameObject, house.metadata.navMeshes);
++            float? minimumAgentSlope = null;
++            if (isMultiFloor) {
++                minimumAgentSlope = house.verticalConnectors.Max(connector =>
++                    Mathf.Atan2(
++                        connector.assetContract.rise,
++                        connector.assetContract.flightRun
++                    ) * Mathf.Rad2Deg + 0.5f
++                );
++            }
++            buildNavMeshes(
++                floorGameObject,
++                house.metadata.navMeshes,
++                minimumAgentSlope,
++                isMultiFloor
++            );
++            if (isMultiFloor) {
++                addVerticalConnectorNavMeshLinks(house.verticalConnectors);
++            }
+
+             if (
+                 string.IsNullOrEmpty(house.proceduralParameters.skyboxId)
+@@ -1801,6 +3013,7 @@ namespace Thor.Procedural {
+
+             setAgentPose(house: house, agentManager: agentManager);
+
++            ACTIVE_HOUSE_SCHEMA = house.metadata.schema;
+             return floorGameObject;
+         }
+
+@@ -1911,9 +3124,16 @@ namespace Thor.Procedural {
+             return $"NavMeshSurface_{index}";
+         }
+
+-        public static GameObject buildNavMeshSurface(NavMeshBuildSettings buildSettings, int index) {
++        public static GameObject buildNavMeshSurface(
++            NavMeshBuildSettings buildSettings,
++            int index,
++            bool usePhysicsColliders = false
++        ) {
+             var go = new GameObject(NavMeshSurfaceName(index));
+             var navMeshSurface = go.AddComponent<NavMeshSurfaceExtended>();
++            if (usePhysicsColliders) {
++                navMeshSurface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
++            }
+             navMeshSurface.agentTypeID = buildSettings.agentTypeID;
+             navMeshSurface.voxelSize = buildSettings.voxelSize;
+             navMeshSurface.overrideVoxelSize = buildSettings.overrideVoxelSize;
+@@ -2062,7 +3282,12 @@ namespace Thor.Procedural {
+             return "NavMeshSurfaces";
+         }
+
+-        public static void buildNavMeshes(GameObject floorGameObject, List<NavMeshConfig> navMeshes) {
++        public static void buildNavMeshes(
++            GameObject floorGameObject,
++            List<NavMeshConfig> navMeshes,
++            float? minimumAgentSlope = null,
++            bool usePhysicsColliders = false
++        ) {
+             var defaultSettings = NavMesh.GetSettingsByIndex(0);
+             if (navMeshes == null || navMeshes.Count == 0) {
+                 navMeshes = new List<NavMeshConfig>()
+@@ -2082,7 +3307,20 @@ namespace Thor.Procedural {
+                 .Select(c => defaultSettings)
+                 .Select(
+                     (c, i) => {
+-                        return navMeshConfigToBuildSettings(navMeshes[i], c);
++                        var settings = navMeshConfigToBuildSettings(navMeshes[i], c);
++                        if (minimumAgentSlope.HasValue) {
++                            settings.agentSlope = Mathf.Max(
++                                settings.agentSlope,
++                                minimumAgentSlope.Value
++                            );
++                        }
++                        if (usePhysicsColliders) {
++                            settings.minRegionArea = Mathf.Min(
++                                settings.minRegionArea,
++                                0.05f
++                            );
++                        }
++                        return settings;
+                     }
+                 );
+
+@@ -2092,7 +3330,7 @@ namespace Thor.Procedural {
+
+             var count = 0;
+             foreach (var config in newConfigs) {
+-                var go = buildNavMeshSurface(config, count);
++                var go = buildNavMeshSurface(config, count, usePhysicsColliders);
+                 go.transform.parent = navmeshesGameObject.transform;
+                 count++;
+             }
+diff --git a/unity/Assets/Scripts/StructureObject.cs b/unity/Assets/Scripts/StructureObject.cs
+index d102b57ba..742ba83a4 100644
+--- a/unity/Assets/Scripts/StructureObject.cs
++++ b/unity/Assets/Scripts/StructureObject.cs
+@@ -37,4 +37,5 @@ public enum StructureObjectTag : int {
+     Rug = 15,
+     FirePlace = 16,
+     DecorativeSticks = 17,
++    Stairs = 18,
+ }
+diff --git a/unity/Assets/Scripts/VerticalConnectorAsset.cs b/unity/Assets/Scripts/VerticalConnectorAsset.cs
+new file mode 100644
+index 000000000..642246a2a
+--- /dev/null
++++ b/unity/Assets/Scripts/VerticalConnectorAsset.cs
+@@ -0,0 +1,47 @@
++using System.Collections.Generic;
++using UnityEngine;
++using UnityEngine.AI;
++
++namespace Thor.Procedural {
++    /// <summary>
++    /// Contract implemented by curated structural connector prefabs.
++    /// The walkableSurface collider is an invisible continuous ramp used by
++    /// both the character controller and runtime navmesh baking.
++    /// </summary>
++    public class VerticalConnectorAsset : MonoBehaviour {
++        public string connectorType = "stairs";
++        public float referenceRise = 3.0f;
++        public float referenceRun = 4.5f;
++        public float referenceWidth = 1.0f;
++        public float reservedEnvelopeWidth = 1.2f;
++        public float reservedEnvelopeLength = 6.5f;
++        public GameObject walkableSurface;
++        public GameObject lowerLandingSurface;
++        public GameObject upperLandingSurface;
++        public Transform lowerLandingAnchor;
++        public Transform upperLandingAnchor;
++
++        private readonly List<NavMeshLinkInstance> runtimeNavMeshLinks =
++            new List<NavMeshLinkInstance>();
++
++        public void AddRuntimeNavMeshLink(NavMeshLinkData data) {
++            var instance = NavMesh.AddLink(data);
++            if (!instance.valid) {
++                throw new System.InvalidOperationException(
++                    $"Could not create a NavMesh link for connector '{gameObject.name}'."
++                );
++            }
++            instance.owner = this;
++            runtimeNavMeshLinks.Add(instance);
++        }
++
++        private void OnDestroy() {
++            foreach (var instance in runtimeNavMeshLinks) {
++                if (instance.valid) {
++                    instance.Remove();
++                }
++            }
++            runtimeNavMeshLinks.Clear();
++        }
++    }
++}
