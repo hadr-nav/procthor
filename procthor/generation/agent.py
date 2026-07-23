@@ -1,5 +1,5 @@
 import random
-from typing import Dict, Literal, TypedDict
+from typing import Dict, Literal, Optional, TypedDict
 
 from procthor.utils.types import Vector3
 from .objects import ProceduralRoom
@@ -36,12 +36,15 @@ class AgentPose(TypedDict):
     """The starting camera horizon of the agent."""
 
 
-def generate_starting_pose(rooms: Dict[int, ProceduralRoom]) -> AgentPose:
+def generate_starting_pose(
+    rooms: Dict[int, ProceduralRoom],
+    room_floor_map: Optional[Dict[int, float]] = None,
+) -> AgentPose:
     """Choose the starting agent pose in the house."""
 
-    rooms = list(rooms.values())
-    random.shuffle(rooms)
-    for room in rooms:
+    candidate_rooms = list(rooms.values())
+    random.shuffle(candidate_rooms)
+    for room in candidate_rooms:
         rect = room.sample_next_rectangle(choose_largest_rectangle=True)
         if rect:
             x0, z0, x1, z1 = rect
@@ -55,7 +58,12 @@ def generate_starting_pose(rooms: Dict[int, ProceduralRoom]) -> AgentPose:
         raise Exception("Unable to place the agent in any room in the house!")
 
     return AgentPose(
-        position=Vector3(x=x, y=AGENT_Y_HEIGHT, z=z),
+        position=Vector3(
+            x=x,
+            y=AGENT_Y_HEIGHT
+            + (0 if room_floor_map is None else room_floor_map[room.room_id]),
+            z=z,
+        ),
         rotation=Vector3(x=0, y=random.choice(ROTATIONS), z=0),
         standing=AGENT_IS_STANDING,
         horizon=AGENT_HORIZON,

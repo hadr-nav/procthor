@@ -14,6 +14,14 @@ class InvalidFloorplan(Exception):
     pass
 
 
+class InvalidMultiFloorPlan(Exception):
+    """Raised when no valid aligned multi-floor structure can be generated."""
+
+
+class MultiFloorCompatibilityError(RuntimeError):
+    """Raised when the active AI2-THOR build does not advertise schema 2 support."""
+
+
 @define
 class SamplingVars:
     interior_boundary_scale: float
@@ -204,6 +212,82 @@ class RoomType(TypedDict):
     children: list  # TODO: what is this?
 
 
+class OptionalSurfaceMaterial(TypedDict, total=False):
+    material: dict
+
+
+class FloorSurface(OptionalSurfaceMaterial):
+    id: str
+    floorId: str
+    roomId: str
+    surfaceType: str
+    polygon: List[Vector3]
+    slabThickness: float
+
+
+class CeilingSurface(OptionalSurfaceMaterial):
+    id: str
+    floorId: str
+    roomId: str
+    surfaceType: str
+    polygon: List[Vector3]
+
+
+class ConnectorAssetContract(TypedDict):
+    rise: float
+    flightWidth: float
+    flightRun: float
+    reservedWidth: float
+    reservedLength: float
+    walkableRampCollider: bool
+
+
+class ConnectorPolygon(TypedDict):
+    id: str
+    floorId: str
+    polygon: List[Vector3]
+
+
+class ConnectorLandingPolygon(ConnectorPolygon):
+    roomId: str
+
+
+class ConnectorOpeningPolygon(ConnectorPolygon):
+    surfaceType: str
+
+
+class MultiFloorRoomType(RoomType):
+    floorId: str
+    floorPolygons: List[FloorSurface]
+
+
+class HouseFloor(TypedDict):
+    id: str
+    index: int
+    baseY: float
+    ceilingY: float
+    slabThickness: float
+    roomIds: List[int]
+    roomIdMap: Dict[str, int]
+    floorSurfaces: List[FloorSurface]
+    ceilingSurfaces: List[CeilingSurface]
+
+
+class VerticalConnector(TypedDict):
+    id: str
+    connectorType: str
+    assetId: str
+    position: Vector3
+    rotation: Vector3
+    lowerFloorId: str
+    upperFloorId: str
+    lowerRoomId: str
+    upperRoomId: str
+    assetContract: ConnectorAssetContract
+    landingPolygons: List[ConnectorLandingPolygon]
+    openingPolygons: List[ConnectorOpeningPolygon]
+
+
 class Wall(TypedDict):
     id: str
     polygon: List[Vector3]
@@ -214,13 +298,16 @@ class Wall(TypedDict):
     empty: bool
 
 
-class HouseDict(TypedDict):
+class HouseDict(TypedDict, total=False):
     doors: Optional[List[Door]]
     windows: Optional[List[Window]]
     objects: Optional[List[Object]]
     proceduralParameters: Optional[ProceduralParameters]
-    rooms: Optional[List[RoomType]]
+    rooms: Optional[List[Union[RoomType, MultiFloorRoomType]]]
     walls: Optional[List[Wall]]
+    metadata: dict
+    floors: Optional[List[HouseFloor]]
+    verticalConnectors: Optional[List[VerticalConnector]]
 
 
 class LeafRoom:

@@ -1,4 +1,5 @@
 import os
+import random
 from datetime import datetime
 from multiprocessing import Pool, Value
 from time import sleep
@@ -7,8 +8,16 @@ import torch
 from ai2thor.controller import Controller
 from ai2thor.platform import CloudRendering
 
-from procthor.constants import PROCTHOR_INITIALIZATION
-from procthor.generation import HouseGenerator, PROCTHOR10K_ROOM_SPEC_SAMPLER
+from procthor.generation import (
+    HouseGenerator,
+    PROCTHOR10K_ROOM_SPEC_SAMPLER,
+    PROCTHOR_MULTIFLOOR_HOUSE_SPEC_SAMPLER,
+)
+
+from procthor.generation.multifloor_generation import (
+    ensure_schema2_controller,
+)
+from procthor.utils.types import InvalidFloorplan, InvalidMultiFloorPlan
 
 print("Starting at", datetime.now())
 
@@ -30,41 +39,67 @@ n_gpus = torch.cuda.device_count()
 # ]
 
 # house_generator = HouseGenerator(split=split)
-house_generators = {}
+controllers = {}
+
+FLOOR_COUNT_POPULATION = [1, 2, 3]
+FLOOR_COUNT_WEIGHTS = [0.50, 0.35, 0.15]
+"""Default dataset mix: 50% one floor, 35% two floors, and 15% three floors."""
+
+
+SCHEMA2_EXECUTABLE_PATH = os.environ.get("PROCTHOR_SCHEMA2_EXECUTABLE")
+if not SCHEMA2_EXECUTABLE_PATH:
+    raise RuntimeError(
+        "Set PROCTHOR_SCHEMA2_EXECUTABLE to the patched AI2-THOR executable "
+        "before generating the default mixed-floor dataset."
+    )
 
 
 def generate_house(i: int) -> None:
     global counter
-    global house_generator
     global n_gpus
 
     pid = os.getpid()
     print(f"Using {pid}")
-    if pid not in house_generators:
+    if pid not in controllers:
         gpu_i = pid % n_gpus
         controller = Controller(
             gpu_device=gpu_i,
             platform=CloudRendering,
             quality="Low",
-            **PROCTHOR_INITIALIZATION,
+            scene="Procedural",
+            local_executable_path=SCHEMA2_EXECUTABLE_PATH,
         )
-        house_generators[pid] = HouseGenerator(
-            controller=controller,
-            split=split,
-            room_spec_sampler=PROCTHOR10K_ROOM_SPEC_SAMPLER,
+        ensure_schema2_controller(controller)
+        controllers[pid] = controller
+
+    # Choose the floor count and complete spec once so retries do not bias the
+    # requested floor distribution or room composition.
+    floor_count = random.choices(
+        FLOOR_COUNT_POPULATION, weights=FLOOR_COUNT_WEIGHTS, k=1
+    )[0]
+    if floor_count == 1:
+        room_spec = PROCTHOR10K_ROOM_SPEC_SAMPLER.sample()
+        house_generator = HouseGenerator(
+            controller=controllers[pid], split=split, room_spec=room_spec
+        )
+    else:
+        house_spec = PROCTHOR_MULTIFLOOR_HOUSE_SPEC_SAMPLER.sample(
+            num_floors=floor_count
+        )
+        house_generator = HouseGenerator(
+            controller=controllers[pid], split=split, house_spec=house_spec
         )
 
-    house_generator = house_generators[pid]
-
-    # NOTE: sometimes house_generator.sample() hangs
-    room_spec = None
     while True:
-        house_generator.room_spec = room_spec
-        house, _ = house_generator.sample()
+        try:
+            house, _ = house_generator.sample()
+        except (InvalidFloorplan, InvalidMultiFloorPlan):
+            # Retry bounded geometry failures without resampling the requested
+            # floor count, RoomSpec, or HouseSpec.
+            continue
         house.validate(house_generator.controller)
         if house.data["metadata"]["warnings"]:
-            # NOTE: Keep the room spec the same to avoid sampling bias.
-            house_generator.room_spec = house.room_spec
+            # Retry geometry/furnishing with the same RoomSpec or HouseSpec.
             continue
         break
 
