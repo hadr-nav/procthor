@@ -81,12 +81,8 @@ def randomize_floor_materials(
     if random.random() < P_ALL_FLOOR_SAME:
         floor_material = random.choice(pt_db.MATERIAL_DATABASE["Wood"])
         for room in partial_house.room_types:
-            room["floorMaterial"] = {
-                "name": floor_material
-            }
+            room["floorMaterial"] = {"name": floor_material}
         return
 
     for room in partial_house.room_types:
-        room["floorMaterial"] = {
-            "name": random.choice(pt_db.MATERIAL_DATABASE["Wood"])
-        }
+        room["floorMaterial"] = {"name": random.choice(pt_db.MATERIAL_DATABASE["Wood"])}
