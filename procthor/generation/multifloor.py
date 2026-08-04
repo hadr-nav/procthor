@@ -774,12 +774,11 @@ def make_vertical_connector(
     if connector_index is None:
         connector_index = lower_floor_index
     connector_index = _floor_index(connector_index, "connector_index")
-    reverse = connector_index % 2 == 1
-    lower_landing, upper_landing = _landing_rectangles(core, reverse=reverse)
+    lower_landing, upper_landing = _landing_rectangles(core, reverse=False)
     upper_floor_index = lower_floor_index + 1
     upper_floor_opening = stair_floor_opening(core, upper_floor_index)
     center_x, center_z = core.center
-    yaw = (core.yaw + (180.0 if reverse else 0.0)) % 360
+    yaw = core.yaw
     identifier = connector_id(lower_floor_index, connector_index)
 
     return {

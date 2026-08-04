@@ -71,6 +71,7 @@ class IntegrationArtifactTests(unittest.TestCase):
             "var collider = source.component as Collider;",
             "tagObjectNavmesh(marker.lowerLandingSurface, ignore: true)",
             "tagObjectNavmesh(marker.upperLandingSurface, ignore: true)",
+            "addDoorNavMeshLinks",
             "addVerticalConnectorNavMeshLinks",
             "AddRuntimeNavMeshLink",
             "runtimeNavMeshLinks",
@@ -78,8 +79,17 @@ class IntegrationArtifactTests(unittest.TestCase):
             "floorStructure.WhatIsMyStructureObjectTag = StructureObjectTag.Floor",
             "tryGetMultiFloorWalkableSurfaceY",
             "usedLinkLookAhead",
-            "verticalConnectorLinkCorridorIsClear",
-            "Physics.CapsuleCastAll",
+            "rampInset",
+            "lowerMidQuery",
+            "upperMidQuery",
+            "sampleRampAdjacentRoomNavMeshHits",
+            "sampleLandingBoundaryNavMeshLinks",
+            "lowerRampRoomHits",
+            "upperRampRoomHits",
+            "lowerLandingLinks",
+            "upperLandingLinks",
+            "NavMesh.CalculatePath",
+            "NavMeshPathStatus.PathComplete",
         ):
             with self.subTest(required_source=required_source):
                 self.assertIn(required_source, self.patch)
@@ -128,25 +138,48 @@ class IntegrationArtifactTests(unittest.TestCase):
         self.assertEqual(look_ahead["maximumPathLengthMultiplier"], 5.0)
 
         links = navigation["landingBoundaryLinks"]
-        self.assertEqual(links["lateralEdgesPerLanding"], 2)
-        self.assertEqual(links["exposedEndEdgesPerLanding"], 1)
-        self.assertEqual(links["sampleOffsetsAlongLanding"], [-0.25, 0.0, 0.25])
         self.assertEqual(
-            links["endEdgeSampleOffsetsAcrossLandingWidth"], [-0.3, 0.0, 0.3]
+            links["adjacentEdgesPerLanding"],
+            {"lateral": 2, "exposedEnd": 1},
         )
-        self.assertEqual(links["stairQueryOffset"], 0.3)
-        self.assertEqual(links["roomQueryOffsets"], [0.3, 0.55, 0.8])
+        self.assertTrue(links["connectsEverySampledAdjacentEdge"])
+        self.assertEqual(links["landingLongitudinalFractions"], [-0.25, 0.0, 0.25])
+        self.assertEqual(links["landingLateralFractions"], [-0.25, 0.0, 0.25])
+        self.assertEqual(
+            links["rampQueryInset"],
+            {"minimum": 0.6, "agentRadiusPadding": 0.4},
+        )
+        self.assertEqual(
+            links["landingSurfaceInset"],
+            {"agentRadiusPadding": 0.05},
+        )
+        self.assertEqual(
+            links["adjacentEdgeQueryInset"],
+            {"agentRadiusPadding": 0.2},
+        )
+        self.assertEqual(
+            links["internalRampSeamQueryInset"],
+            {"agentRadiusPadding": 0.1},
+        )
+        self.assertEqual(links["sampleDistance"], 0.2)
+        self.assertTrue(links["roomToRampLinksRequired"])
+        self.assertTrue(links["landingBoundaryLinksRequireBothSamples"])
+        self.assertTrue(links["internalRampSeamLink"])
         self.assertEqual(links["width"], 0.0)
         self.assertTrue(links["bidirectional"])
-        corridor = links["corridorClearance"]
-        self.assertTrue(corridor["requiredBeforeLinkCreation"])
-        self.assertEqual(corridor["cast"], "Physics.CapsuleCastAll")
-        self.assertTrue(corridor["usesAgentBuildSettings"])
-        self.assertEqual(corridor["minimumRadius"], 0.05)
-        self.assertEqual(corridor["queryTriggerInteraction"], "Ignore")
+        self.assertTrue(links["completeLowerToUpperPathRequired"])
         self.assertEqual(
             links["failureDiagnostics"],
-            ["candidateCount", "stairSampleCount", "roomSampleCount"],
+            [
+                "lowerRampSampled",
+                "lowerMidRampSampled",
+                "upperMidRampSampled",
+                "upperRampSampled",
+                "lowerRampRoomCount",
+                "upperRampRoomCount",
+                "lowerLandingLinkCount",
+                "upperLandingLinkCount",
+            ],
         )
         self.assertEqual(
             self.contract["generatorObjectClearance"],
@@ -172,40 +205,74 @@ class IntegrationArtifactTests(unittest.TestCase):
 
     def test_runtime_landing_links_are_sampled_for_active_agent_types(self):
         link_method = self.patch.split(
-            "private static void addVerticalConnectorNavMeshLinks", 1
+            "private static List<NavMeshHit> sampleRampAdjacentRoomNavMeshHits", 1
         )[1].split("private static void createMultiFloorRoomSurfaces", 1)[0]
 
         for required_source in (
             "GameObject.FindObjectsOfType<NavMeshSurfaceExtended>()",
             ".Where(surface => surface.isActiveAndEnabled)",
             "new NavMeshQueryFilter()",
-            "foreach (var sideSign in new[] { -1.0f, 1.0f })",
-            "new[] { -0.25f, 0.0f, 0.25f }",
-            "var endOutward = (upper ? 1.0f : -1.0f) * forward",
-            "new[] { -0.3f, 0.0f, 0.3f }",
-            "foreach (var roomOffset in new[] { 0.3f, 0.55f, 0.8f })",
             "agentBuildSettings",
-            "verticalConnectorLinkCorridorIsClear",
+            "var rampInset = Mathf.Max(",
+            "0.6f,",
+            "agentBuildSettings.agentRadius + 0.4f",
+            "agentRadius + 0.2f",
+            "agentBuildSettings.agentRadius + 0.1f",
+            "var landingInset = agentRadius + 0.05f",
+            "new[] { -1.0f, 1.0f }",
+            "new[] { -0.25f, 0.0f, 0.25f }",
+            "const float sampleDistance = 0.2f",
+            "lowerMidQuery",
+            "upperMidQuery",
+            "lowerRampRoomHits",
+            "upperRampRoomHits",
+            "lowerLandingLinks",
+            "upperLandingLinks",
             "NavMesh.SamplePosition",
+            "links.Add((landingHit, roomHit))",
+            "foreach (var roomHit in lowerRampRoomHits)",
+            "foreach (var link in lowerLandingLinks)",
+            "foreach (var link in upperLandingLinks)",
+            "foreach (var roomHit in upperRampRoomHits)",
             "width = 0.0f",
             "bidirectional = true",
-            "sampledLinkCount == 0",
-            "candidateCount",
-            "stairSampleCount",
-            "roomSampleCount",
+            "lowerRampRoomHits.Count == 0",
+            "|| upperRampRoomHits.Count == 0",
+            "NavMesh.CalculatePath",
+            "path.status != NavMeshPathStatus.PathComplete",
         ):
             with self.subTest(required_source=required_source):
                 self.assertIn(required_source, link_method)
-        self.assertNotIn("NavMesh.CalculatePath", link_method)
+        self.assertNotIn("|| lowerLandingLinks.Count == 0", link_method)
+        self.assertNotIn("|| upperLandingLinks.Count == 0", link_method)
 
-        corridor_method = self.patch.split(
-            "private static bool verticalConnectorLinkCorridorIsClear", 1
-        )[1].split("private static void addVerticalConnectorNavMeshLinks", 1)[0]
-        self.assertIn("Physics.CapsuleCastAll", corridor_method)
-        self.assertIn("QueryTriggerInteraction.Ignore", corridor_method)
-        self.assertIn("buildSettings.agentRadius", corridor_method)
-        self.assertIn("buildSettings.agentHeight", corridor_method)
-        self.assertIn("StructureObjectTag.Floor", corridor_method)
+    def test_internal_doorways_receive_owned_bidirectional_links(self):
+        link_method = self.patch.split("private static void addDoorNavMeshLinks", 1)[
+            1
+        ].split("private static void createMultiFloorRoomSurfaces", 1)[0]
+
+        for required_source in (
+            "doors.Where(door =>",
+            "!String.IsNullOrEmpty(door.room1) && door.room0 != door.room1",
+            "GameObject.FindObjectsOfType<NavMeshSurfaceExtended>()",
+            "new NavMeshQueryFilter()",
+            "NavMesh.SamplePosition",
+            "owner.AddRuntimeNavMeshLink",
+            "width = 0.0f",
+            "bidirectional = true",
+        ):
+            with self.subTest(required_source=required_source):
+                self.assertIn(required_source, link_method)
+
+        self.assertIn(
+            "addDoorNavMeshLinks(house.doors, walls)",
+            self.patch,
+        )
+        self.assertIn(
+            "Could not create a NavMesh link for doorway",
+            self.patch,
+        )
+        self.assertIn("runtimeNavMeshLinks", self.patch)
 
     def test_multifloor_movement_uses_physical_heights_and_bounded_lookahead(self):
         height_method = self.patch.split(

@@ -16,6 +16,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+generated-scenes/
 develop-eggs/
 dist/
 downloads/

@@ -175,11 +175,15 @@ and ceilings at their supplied world-space elevations, places structural stairs
 before navmesh construction, and replaces the stair prefab's invisible ramp mesh
 with one connected lower-landing/ramp/upper-landing collider. Navmesh baking
 excludes trigger volumes, caps physics-collider `minRegionArea` at `0.05`,
-and tags physical floor surfaces for height raycasts. Sampled bidirectional
-links across both lateral edges and the exposed end edge of each landing try
-room offsets of `0.3`, `0.55`, and `0.8 m` for every active agent type,
-but only when an agent-sized trigger-ignoring capsule cast finds an unobstructed
-corridor. Standard movement uses physical floor/stair heights plus bounded
+and tags physical floor surfaces for height raycasts. Every internal doorway
+receives a sampled bidirectional zero-width link per active agent type so the
+two room surfaces remain connected while physical colliders still gate motion.
+Required bidirectional links connect room surfaces to inset ramp anchors for
+every active agent type. Additional locally adjacent links are sampled at three
+positions across both lateral edges and the exposed end edge of each landing
+where both surfaces exist. A short link bridges the ramp mesh seam, and scene
+creation requires a complete lower-to-upper navmesh path. Standard movement
+uses physical floor/stair heights plus bounded
 forward lookahead to cross those links and requires support beneath the
 horizontal action target. The lower ceiling and upper floor retain full-core
 1.2 m by 6.5 m openings. An unpatched engine is rejected by the capability

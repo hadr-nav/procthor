@@ -47,11 +47,15 @@ Schema `2.0.0` adds:
 - schema-2 navmeshes collected from non-trigger physics colliders with every
   effective agent slope clamped at least 0.5 degrees above the serialized ramp
   slope and `minRegionArea` capped at `0.05`;
-- sampled, bidirectional zero-width links across both lateral edges and the
-  exposed end edge of each landing for every active navmesh agent type, trying
-  room-side offsets of `0.3`, `0.55`, and `0.8` m and reporting candidate,
-  stair, and room sample counts when no pair is found; sampled pairs are accepted
-  only when an agent-sized trigger-ignoring capsule cast finds a clear corridor;
+- sampled, bidirectional zero-width links across every internal doorway for
+  each active navmesh agent type, restoring room-to-room connectivity while
+  leaving physical door and wall colliders authoritative for movement;
+- required bidirectional zero-width links from room surfaces to inset ramp
+  anchors, additional locally adjacent links sampled at three positions across
+  both lateral edges and the exposed end edge of each landing, and a short link
+  across the ramp mesh seam for every active navmesh agent type; scene creation
+  rejects a connector unless the resulting navmesh has a complete
+  lower-to-upper path;
 - navmesh-based schema-2 reachable positions containing distinct floor y
   values;
 - schema-2 discrete movement projected using physical floor/stair height
@@ -137,11 +141,13 @@ registered:
    bake, its visual hierarchy is Not Walkable, trigger colliders are excluded,
    the surface uses `PhysicsColliders`, and every effective agent slope is at
    least `34.1900675` degrees while `minRegionArea <= 0.05`. After baking,
-   assert sampled bidirectional links span both lateral edges and the exposed
-   end edge of each landing for every active agent type, trying all configured
-   room offsets, rejecting agent-sized corridors obstructed by non-floor scene
-   geometry, and including sample counts in a no-link diagnostic.
-6. Controller integration: `GetReachablePositions` from either floor returns
+   assert required room-to-ramp links exist, additional locally adjacent links
+   are created wherever both sides sample successfully at three positions
+   across each landing edge, the ramp mesh seam is bridged, and the result is a
+   complete lower-to-upper navmesh path for every active agent type.
+6. Unity PlayMode: assert every internal doorway has one sampled bidirectional
+   link per active agent type and that links are removed with their owning door.
+7. Controller integration: `GetReachablePositions` from either floor returns
    positions near both base y values and `GetShortestPath` completes across
    the stair and at least 0.5 m beyond the complete stair envelope; repeated
    standard movement actions leave the stair for the upper room and traverse it
@@ -149,9 +155,9 @@ registered:
    agent y. Exercise direct and link-lookahead projections, reject unsupported
    horizontal targets, and reject paths over the configured `5× + 0.1 m` local
    cap.
-7. Repeat for three floors and assert the second stair is yaw-rotated 180
+8. Repeat for three floors and assert the second stair is yaw-rotated 180
    degrees.
-8. Negative cases: missing prefab, scaled or mis-parented ramp, malformed or
+9. Negative cases: missing prefab, scaled or mis-parented ramp, malformed or
    offset platform colliders, duplicate/missing adjacent connector pairs,
    overlapping or opening-covering surfaces, inconsistent flattened copies,
    invalid materials, non-adjacent floor IDs, and unsupported schema all fail

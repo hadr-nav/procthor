@@ -155,48 +155,50 @@
     "landingBoundaryLinks": {
       "createdAfterNavMeshBuild": true,
       "agentTypeIds": "active NavMeshSurfaceExtended components",
-      "lateralEdgesPerLanding": 2,
-      "exposedEndEdgesPerLanding": 1,
-      "sampleOffsetsAlongLanding": [
+      "adjacentEdgesPerLanding": {
+        "lateral": 2,
+        "exposedEnd": 1
+      },
+      "connectsEverySampledAdjacentEdge": true,
+      "landingLongitudinalFractions": [
         -0.25,
         0.0,
         0.25
       ],
-      "endEdgeSampleOffsetsAcrossLandingWidth": [
-        -0.3,
+      "landingLateralFractions": [
+        -0.25,
         0.0,
-        0.3
+        0.25
       ],
-      "stairQueryOffset": 0.3,
-      "roomQueryOffsets": [
-        0.3,
-        0.55,
-        0.8
-      ],
-      "sampleRadius": 0.25,
+      "rampQueryInset": {
+        "minimum": 0.6,
+        "agentRadiusPadding": 0.4
+      },
+      "landingSurfaceInset": {
+        "agentRadiusPadding": 0.05
+      },
+      "adjacentEdgeQueryInset": {
+        "agentRadiusPadding": 0.2
+      },
+      "internalRampSeamQueryInset": {
+        "agentRadiusPadding": 0.1
+      },
+      "sampleDistance": 0.2,
+      "roomToRampLinksRequired": true,
+      "landingBoundaryLinksRequireBothSamples": true,
+      "internalRampSeamLink": true,
       "width": 0.0,
       "bidirectional": true,
-      "minimumSampledPairsPerLandingAndAgentType": 1,
-      "corridorClearance": {
-        "requiredBeforeLinkCreation": true,
-        "cast": "Physics.CapsuleCastAll",
-        "usesAgentBuildSettings": true,
-        "minimumRadius": 0.05,
-        "baseHeightOffset": 0.05,
-        "excludedLayers": [
-          "Agent",
-          "SimObjInvisible"
-        ],
-        "queryTriggerInteraction": "Ignore",
-        "allowedHits": [
-          "vertical connector walkable colliders",
-          "StructureObjectTag.Floor"
-        ]
-      },
+      "completeLowerToUpperPathRequired": true,
       "failureDiagnostics": [
-        "candidateCount",
-        "stairSampleCount",
-        "roomSampleCount"
+        "lowerRampSampled",
+        "lowerMidRampSampled",
+        "upperMidRampSampled",
+        "upperRampSampled",
+        "lowerRampRoomCount",
+        "upperRampRoomCount",
+        "lowerLandingLinkCount",
+        "upperLandingLinkCount"
       ],
       "lifecycleOwner": "VerticalConnectorAsset"
     }
