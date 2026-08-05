@@ -53,12 +53,17 @@ Schema `2.0.0` adds:
 - required bidirectional zero-width links from room surfaces to inset ramp
   anchors, additional locally adjacent links sampled at three positions across
   both lateral edges and the exposed end edge of each landing, and a short link
-  across the ramp mesh seam for every active navmesh agent type; scene creation
-  rejects a connector unless the resulting navmesh has a complete
+  across the ramp mesh seam for every active navmesh agent type; candidate
+  landing links that cross a physical wall are rejected using explicit
+  `StructureObjectTag.Wall` tags, and scene creation rejects a connector unless
+  the resulting navmesh has a complete
   lower-to-upper path;
 - navmesh-based schema-2 reachable positions containing distinct floor y
   values;
-- schema-2 discrete movement projected using physical floor/stair height
+- schema-2 shortest-path endpoint sampling preserves each requested y instead
+  of flattening both endpoints to one floor;
+- optional `targetY` is propagated through remote `MoveAhead`, and schema-2
+  discrete movement is projected using physical floor/stair height
   raycasts, with bounded `0.25`/`0.5`/`0.75` m forward lookahead and a
   local path-length cap of `5×` the action distance plus `0.1` m, allowing
   standard movement actions to cross landing links and ascend or descend only
@@ -163,6 +168,7 @@ registered:
    invalid materials, non-adjacent floor IDs, and unsupported schema all fail
    before scene mutation.
 
-This artifact was prepared against the pinned source checkout. A Unity
-compile/play test still requires a persistent AI2-THOR worktree plus the
-curated binary prefab.
+This artifact was prepared against the pinned source checkout and clean-applies
+there. The patched Unity player was built and exercised through AI2-THOR on 100
+ProcTHOR scenes; all 100 completed A* waypoint following with zero collisions.
+The separate EditMode and PlayMode suites above remain required.

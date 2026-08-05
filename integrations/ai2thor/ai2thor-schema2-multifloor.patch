@@ -12,7 +12,7 @@ index 2c86c1bd6..6994711e0 100644
                      return;
                  }
 diff --git a/unity/Assets/Scripts/BaseFPSAgentController.cs b/unity/Assets/Scripts/BaseFPSAgentController.cs
-index 5a52738ef..f2ba8f9c4 100644
+index 5a52738ef..e15e89165 100644
 --- a/unity/Assets/Scripts/BaseFPSAgentController.cs
 +++ b/unity/Assets/Scripts/BaseFPSAgentController.cs
 @@ -523,6 +523,120 @@ namespace UnityStandardAssets.Characters.FirstPerson {
@@ -151,7 +151,7 @@ index 5a52738ef..f2ba8f9c4 100644
              CapsuleData capsule = GetAgentCapsule();
  
              // Debug.Log($"Capsule collider: {cc.radius}, height {cc.height}, innerheight: {cc.height / 2.0f - cc.radius;} startpos: {transform.position + cc.transform.TransformDirection(cc.center)}");
-@@ -1448,6 +1570,223 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+@@ -1448,6 +1570,242 @@ namespace UnityStandardAssets.Characters.FirstPerson {
          // checks before actually moving. Previously we would moveCharacter() first and if we hit anything reset, but now to match
          // Luca's movement grid and valid position generation, simple transform setting is used for movement instead.
  
@@ -161,6 +161,17 @@ index 5a52738ef..f2ba8f9c4 100644
 +            var result = ignoreColliders == null
 +                ? new HashSet<Collider>()
 +                : new HashSet<Collider>(ignoreColliders);
++            foreach (var structure in GameObject.FindObjectsOfType<StructureObject>()) {
++                if (
++                    structure.WhatIsMyStructureObjectTag
++                    != StructureObjectTag.Floor
++                ) {
++                    continue;
++                }
++                foreach (var collider in structure.GetComponentsInChildren<Collider>(true)) {
++                    result.Add(collider);
++                }
++            }
 +            foreach (var connector in GameObject.FindObjectsOfType<VerticalConnectorAsset>()) {
 +                if (connector.walkableSurface == null) {
 +                    continue;
@@ -176,11 +187,12 @@ index 5a52738ef..f2ba8f9c4 100644
 +
 +        private bool tryGetMultiFloorWalkableSurfaceY(
 +            Vector3 position,
++            float? raycastY,
 +            out float surfaceY
 +        ) {
 +            var origin = new Vector3(
 +                position.x,
-+                transform.position.y + 0.5f,
++                raycastY.GetValueOrDefault(transform.position.y) + 0.5f,
 +                position.z
 +            );
 +            var layerMask = ~LayerMask.GetMask("Agent", "SimObjInvisible");
@@ -229,6 +241,7 @@ index 5a52738ef..f2ba8f9c4 100644
 +        private bool tryProjectMultiFloorMovementTarget(
 +            Vector3 horizontalTarget,
 +            float horizontalDistance,
++            float? targetY,
 +            out Vector3 projectedTarget
 +        ) {
 +            projectedTarget = horizontalTarget;
@@ -249,13 +262,17 @@ index 5a52738ef..f2ba8f9c4 100644
 +                return false;
 +            }
 +
++            var agentYOffset = transform.position.y - startHit.position.y;
++            var targetSurfaceY = targetY.HasValue
++                ? targetY.Value - agentYOffset
++                : startHit.position.y;
 +            var query = horizontalTarget;
-+            query.y = startHit.position.y;
++            query.y = targetSurfaceY;
 +            NavMeshHit targetHit;
 +            var targetWasSampled = NavMesh.SamplePosition(
 +                query,
 +                out targetHit,
-+                Mathf.Max(0.35f, horizontalDistance),
++                targetY.HasValue ? 0.35f : Mathf.Max(0.35f, horizontalDistance),
 +                NavMesh.AllAreas
 +            );
 +            var targetXZ = new Vector2(horizontalTarget.x, horizontalTarget.z);
@@ -273,7 +290,7 @@ index 5a52738ef..f2ba8f9c4 100644
 +                foreach (var lookAheadDistance in new[] { 0.25f, 0.5f, 0.75f }) {
 +                    var lookAheadQuery = new Vector3(
 +                        horizontalTarget.x + movementXZ.x * lookAheadDistance,
-+                        startHit.position.y,
++                        targetSurfaceY,
 +                        horizontalTarget.z + movementXZ.y * lookAheadDistance
 +                    );
 +                    NavMeshHit lookAheadHit;
@@ -314,10 +331,12 @@ index 5a52738ef..f2ba8f9c4 100644
 +            float targetPhysicalSurfaceY;
 +            var hasCurrentPhysicalSurface = tryGetMultiFloorWalkableSurfaceY(
 +                transform.position,
++                null,
 +                out currentPhysicalSurfaceY
 +            );
 +            var hasTargetPhysicalSurface = tryGetMultiFloorWalkableSurfaceY(
 +                horizontalTarget,
++                targetY,
 +                out targetPhysicalSurfaceY
 +            );
 +            if (usedLinkLookAhead && !hasTargetPhysicalSurface) {
@@ -375,8 +394,13 @@ index 5a52738ef..f2ba8f9c4 100644
          // XXX revisit what movement means when we more clearly define what "continuous" movement is
          protected bool moveInDirection(
              Vector3 direction,
-@@ -1458,11 +1797,27 @@ namespace UnityStandardAssets.Characters.FirstPerson {
-             HashSet<Collider> ignoreColliders = null
+@@ -1455,14 +1813,32 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             float maxDistanceToObject = -1.0f,
+             bool forceAction = false,
+             bool manualInteract = false,
+-            HashSet<Collider> ignoreColliders = null
++            HashSet<Collider> ignoreColliders = null,
++            float? targetY = null
          ) {
              Vector3 targetPosition = transform.position + direction;
 +            Vector3 movementOffset = direction;
@@ -388,6 +412,7 @@ index 5a52738ef..f2ba8f9c4 100644
 +                if (!tryProjectMultiFloorMovementTarget(
 +                    targetPosition,
 +                    direction.magnitude,
++                    targetY,
 +                    out targetPosition
 +                )) {
 +                    return false;
@@ -405,7 +430,39 @@ index 5a52738ef..f2ba8f9c4 100644
              ) {
                  // only default hand if not manually interacting with things
                  if (!manualInteract) {
-@@ -7813,6 +8168,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+@@ -6918,17 +7294,24 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+                     navMeshId
+                 );
+ 
++                var isMultiFloor = ProceduralTools.ACTIVE_HOUSE_SCHEMA
++                    == ProceduralTools.MULTI_FLOOR_HOUSE_SCHEMA;
+                 var pathStartPosition = new Vector3(start.x, start.y, start.z);
+-                var pathTargetPosition = new Vector3(target.x, start.y, target.z);
++                var pathTargetPosition = new Vector3(
++                    target.x, isMultiFloor ? target.y : start.y, target.z
++                );
+ 
+                 if (sampleFromNavmesh) {
+-                    float floorY = Math.Min(
+-                        getFloorY(start.x, start.y, start.z),
+-                        getFloorY(target.x, target.y, target.z)
++                    float startFloorY = getFloorY(start.x, start.y, start.z);
++                    float targetFloorY = getFloorY(target.x, target.y, target.z);
++                    float sharedFloorY = Math.Min(startFloorY, targetFloorY);
++                    Vector3 startPositionWithFloorY = new Vector3(
++                        start.x, isMultiFloor ? startFloorY : sharedFloorY, start.z
++                    );
++                    Debug.Log($"----- Navmesh floorY {startPositionWithFloorY.y.ToString("F6")}");
++                    Vector3 targetPositionWithFloorY = new Vector3(
++                        target.x, isMultiFloor ? targetFloorY : sharedFloorY, target.z
+                     );
+-                    Vector3 startPositionWithFloorY = new Vector3(start.x, floorY, start.z);
+-                    Debug.Log($"----- Navmesh floorY {floorY.ToString("F6")}");
+-                    Vector3 targetPositionWithFloorY = new Vector3(target.x, floorY, target.z);
+ 
+                     NavMeshHit startHit;
+                     // startPosition.y = 0.167557f;
+@@ -7813,6 +8196,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
              actionFinished(success: true, actionReturn: Application.persistentDataPath);
          }
  
@@ -419,7 +476,7 @@ index 5a52738ef..f2ba8f9c4 100644
          public void CreateHouse(ProceduralHouse house) {
              var rooms = house.rooms.SelectMany(room => house.rooms);
  
-@@ -7820,8 +8182,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+@@ -7820,8 +8210,13 @@ namespace UnityStandardAssets.Characters.FirstPerson {
              var materialIds = new HashSet<string>(
                  house
                      .rooms.SelectMany(r =>
@@ -434,7 +491,7 @@ index 5a52738ef..f2ba8f9c4 100644
                              .Concat(house.walls.Select(w => w.material.name))
                      )
                      .Concat(new List<string>() { house.proceduralParameters.ceilingMaterial.name })
-@@ -7835,6 +8202,7 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+@@ -7835,6 +8230,7 @@ namespace UnityStandardAssets.Characters.FirstPerson {
                          + "Not existing or not loaded to the ProceduralAssetDatabase component."
                      )
                  );
@@ -505,6 +562,30 @@ index c228c05f2..51c06c49c 100644
          if (ignoreNavMeshAgent) {
              sources.RemoveAll(
                  (x) =>
+diff --git a/unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs b/unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs
+index 2b0b75845..b32570db6 100644
+--- a/unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs
++++ b/unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs
+@@ -1865,7 +1865,8 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+             float maxAgentsDistance = -1f,
+             bool forceAction = false,
+             bool manualInteract = false,
+-            bool allowAgentsToIntersect = false
++            bool allowAgentsToIntersect = false,
++            float? targetY = null
+         ) {
+             if (!moveMagnitude.HasValue) {
+                 moveMagnitude = gridSize;
+@@ -1880,7 +1881,8 @@ namespace UnityStandardAssets.Characters.FirstPerson {
+                     maxDistanceToObject: maxAgentsDistance,
+                     forceAction: forceAction,
+                     manualInteract: manualInteract,
+-                    ignoreColliders: allowAgentsToIntersect ? allAgentColliders() : null
++                    ignoreColliders: allowAgentsToIntersect ? allAgentColliders() : null,
++                    targetY: targetY
+                 )
+             );
+         }
 diff --git a/unity/Assets/Scripts/ProceduralData.cs b/unity/Assets/Scripts/ProceduralData.cs
 index 8aa95b16b..997023d0c 100644
 --- a/unity/Assets/Scripts/ProceduralData.cs
@@ -619,7 +700,7 @@ index 8aa95b16b..997023d0c 100644
          public List<Door> doors { get; set; } = new List<Door>();
          public List<Window> windows { get; set; } = new List<Window>();
 diff --git a/unity/Assets/Scripts/ProceduralTools.cs b/unity/Assets/Scripts/ProceduralTools.cs
-index 9d779f1f8..0a60a0a71 100644
+index 9d779f1f8..f20951090 100644
 --- a/unity/Assets/Scripts/ProceduralTools.cs
 +++ b/unity/Assets/Scripts/ProceduralTools.cs
 @@ -66,6 +66,10 @@ namespace Thor.Procedural {
@@ -656,7 +737,16 @@ index 9d779f1f8..0a60a0a71 100644
          // TODO triangulation code here
          public static UnityEngine.Mesh GetPolygonMesh(
              RoomHierarchy room,
-@@ -1370,6 +1390,1372 @@ namespace Thor.Procedural {
+@@ -614,6 +634,8 @@ namespace Thor.Procedural {
+         ) {
+             var wallGO = new GameObject(toCreate.id);
+ 
++            var structure = wallGO.AddComponent<StructureObject>();
++            structure.WhatIsMyStructureObjectTag = StructureObjectTag.Wall;
+             SetLayer<Transform>(wallGO, layer);
+ 
+             var meshF = wallGO.AddComponent<MeshFilter>();
+@@ -1370,6 +1392,1407 @@ namespace Thor.Procedural {
              }
          }
  
@@ -1486,6 +1576,27 @@ index 9d779f1f8..0a60a0a71 100644
 +            }
 +            return hits;
 +        }
++        private static bool wallBlocksConnectorLink(
++            Vector3 landingPosition,
++            Vector3 roomPosition
++        ) {
++            var start = landingPosition + Vector3.up * 0.5f;
++            var offset = roomPosition - landingPosition;
++            return Physics
++                .RaycastAll(
++                    start,
++                    offset.normalized,
++                    offset.magnitude
++                )
++                .Any(hit => {
++                    var structure = hit.collider.GetComponentInParent<StructureObject>();
++                    return structure != null
++                        && structure.WhatIsMyStructureObjectTag
++                            == StructureObjectTag.Wall;
++                });
++        }
++
++
 +
 +        private static List<(NavMeshHit landingHit, NavMeshHit roomHit)>
 +            sampleLandingBoundaryNavMeshLinks(
@@ -1573,7 +1684,11 @@ index 9d779f1f8..0a60a0a71 100644
 +                    links.Add((landingHit, roomHit));
 +                }
 +            }
-+            return links;
++            return links
++                .Where(link =>
++                    !wallBlocksConnectorLink(link.landingHit.position, link.roomHit.position)
++                )
++                .ToList();
 +        }
 +
 +        private static void addVerticalConnectorNavMeshLinks(
@@ -1715,6 +1830,16 @@ index 9d779f1f8..0a60a0a71 100644
 +                            + $"upper: {upperStairSampled})."
 +                        );
 +                    }
++                    lowerRampRoomHits = lowerRampRoomHits
++                        .Where(hit =>
++                            !wallBlocksConnectorLink(lowerStairHit.position, hit.position)
++                        )
++                        .ToList();
++                    upperRampRoomHits = upperRampRoomHits
++                        .Where(hit =>
++                            !wallBlocksConnectorLink(upperStairHit.position, hit.position)
++                        )
++                        .ToList();
 +                    if (
 +                        lowerRampRoomHits.Count == 0
 +                        || upperRampRoomHits.Count == 0
@@ -2029,7 +2154,7 @@ index 9d779f1f8..0a60a0a71 100644
          public static GameObject CreateHouse(
              ProceduralHouse house,
              AssetMap<Material> materialDb,
-@@ -1394,14 +2780,18 @@ namespace Thor.Procedural {
+@@ -1394,14 +2817,18 @@ namespace Thor.Procedural {
              var schema = parseHouseVersion(house.metadata?.schema);
              var latestSchema = parseHouseVersion(CURRENT_HOUSE_SCHEMA);
              var versionCompare = compareVersion(schema, latestSchema);
@@ -2049,7 +2174,7 @@ index 9d779f1f8..0a60a0a71 100644
  
              string simObjId = !String.IsNullOrEmpty(house.id)
                  ? house.id
-@@ -1435,12 +2825,22 @@ namespace Thor.Procedural {
+@@ -1435,12 +2862,22 @@ namespace Thor.Procedural {
              var wallsMaxY = wallPoints.Count() > 0 ? wallPoints.Max(p => p.y) : 0.0f;
              var wallsMaxHeight = walls.Count() > 0 ? walls.Max(w => w.height) : 0.0f;
  
@@ -2077,7 +2202,7 @@ index 9d779f1f8..0a60a0a71 100644
              for (int i = 0; i < house.rooms.Count(); i++) {
                  var room = house.rooms.ElementAt(i);
                  var subFloorGO = createSimObjPhysicsGameObject(room.id);
-@@ -1534,6 +2934,7 @@ namespace Thor.Procedural {
+@@ -1534,6 +2971,7 @@ namespace Thor.Procedural {
                  receptacleTriggerBox,
                  collider.GetComponentInChildren<Collider>()
              );
@@ -2085,7 +2210,7 @@ index 9d779f1f8..0a60a0a71 100644
  
              var structureGO = new GameObject(DefaultRootStructureObjectName);
  
-@@ -1548,7 +2949,10 @@ namespace Thor.Procedural {
+@@ -1548,7 +2986,10 @@ namespace Thor.Procedural {
              wallsGO.transform.parent = structureGO.transform;
  
              // generate ceiling
@@ -2097,7 +2222,7 @@ index 9d779f1f8..0a60a0a71 100644
                  var ceilingParent = new GameObject(DefaultCeilingRootObjectName);
  
                  // OLD rectangular ceiling, may be usefull to have as a feature, much faster
-@@ -1614,6 +3018,10 @@ namespace Thor.Procedural {
+@@ -1614,6 +3055,10 @@ namespace Thor.Procedural {
                  ceilingParent.transform.parent = structureGO.transform;
              }
  
@@ -2108,7 +2233,7 @@ index 9d779f1f8..0a60a0a71 100644
              CollisionDetectionMode collDet = CollisionDetectionMode.ContinuousSpeculative;
              if (!string.IsNullOrEmpty(house.proceduralParameters.collisionDetectionMode)) {
                  Enum.TryParse(house.proceduralParameters.collisionDetectionMode, true, out collDet);
-@@ -1753,7 +3161,25 @@ namespace Thor.Procedural {
+@@ -1753,7 +3198,25 @@ namespace Thor.Procedural {
                  }
              }
  
@@ -2135,7 +2260,7 @@ index 9d779f1f8..0a60a0a71 100644
  
              if (
                  string.IsNullOrEmpty(house.proceduralParameters.skyboxId)
-@@ -1801,6 +3227,7 @@ namespace Thor.Procedural {
+@@ -1801,6 +3264,7 @@ namespace Thor.Procedural {
  
              setAgentPose(house: house, agentManager: agentManager);
  
@@ -2143,7 +2268,7 @@ index 9d779f1f8..0a60a0a71 100644
              return floorGameObject;
          }
  
-@@ -1911,9 +3338,16 @@ namespace Thor.Procedural {
+@@ -1911,9 +3375,16 @@ namespace Thor.Procedural {
              return $"NavMeshSurface_{index}";
          }
  
@@ -2161,7 +2286,7 @@ index 9d779f1f8..0a60a0a71 100644
              navMeshSurface.agentTypeID = buildSettings.agentTypeID;
              navMeshSurface.voxelSize = buildSettings.voxelSize;
              navMeshSurface.overrideVoxelSize = buildSettings.overrideVoxelSize;
-@@ -2062,7 +3496,12 @@ namespace Thor.Procedural {
+@@ -2062,7 +3533,12 @@ namespace Thor.Procedural {
              return "NavMeshSurfaces";
          }
  
@@ -2175,7 +2300,7 @@ index 9d779f1f8..0a60a0a71 100644
              var defaultSettings = NavMesh.GetSettingsByIndex(0);
              if (navMeshes == null || navMeshes.Count == 0) {
                  navMeshes = new List<NavMeshConfig>()
-@@ -2082,7 +3521,20 @@ namespace Thor.Procedural {
+@@ -2082,7 +3558,20 @@ namespace Thor.Procedural {
                  .Select(c => defaultSettings)
                  .Select(
                      (c, i) => {
@@ -2197,7 +2322,7 @@ index 9d779f1f8..0a60a0a71 100644
                      }
                  );
  
-@@ -2092,7 +3544,7 @@ namespace Thor.Procedural {
+@@ -2092,7 +3581,7 @@ namespace Thor.Procedural {
  
              var count = 0;
              foreach (var config in newConfigs) {

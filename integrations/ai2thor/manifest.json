@@ -4,7 +4,7 @@
   "engineBaseCommit": "24f79883b4889e3f0e6f4ae301808b9025872dfc",
   "patch": {
     "path": "ai2thor-schema2-multifloor.patch",
-    "sha256": "6578aa0bc3a0b489ee809c0b4aaecc962e37421c668cecb13da5021dfbd65eb8",
+    "sha256": "8a83ea231aa2782b764cbd2b9ee7bbbfe80f970e917a4ce2b1b11789e43e8e0d",
     "applyCheck": "passed"
   },
   "supportedHouseSchemas": [
@@ -22,6 +22,7 @@
     "unity/Assets/Scripts/BaseFPSAgentController.cs",
     "unity/Assets/Scripts/ConnectionProperties.cs",
     "unity/Assets/Scripts/NavMeshSurfaceExtended.cs",
+    "unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs",
     "unity/Assets/Scripts/ProceduralData.cs",
     "unity/Assets/Scripts/ProceduralTools.cs",
     "unity/Assets/Scripts/StructureObject.cs",
@@ -30,7 +31,8 @@
   "verification": {
     "diffCheck": "passed",
     "cleanApplyAtPinnedCommit": "passed",
-    "unityCompile": "requires persistent AI2-THOR checkout",
-    "unityPlayMode": "requires curated prefab"
+    "unityCompile": "passed",
+    "unityRuntimeNavigation": "passed: 100/100 scenes, zero collisions",
+    "unityPlayMode": "not run"
   }
 }
