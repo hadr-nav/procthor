@@ -108,7 +108,7 @@ The first schema-2 implementation intentionally uses one fixed contract:
 - `0.2 m` intermediate slab and `2.8 m` clear room height;
 - one shared `1.2 m x 6.5 m` reserved stair core;
 - a straight `1.0 m` wide flight with a `4.5 m` run and `3.0 m` rise; and
-- for three floors, the second flight is rotated `180°` relative to the first.
+- for three floors, both flights use the same aligned orientation.
 
 The matching public constants are `FLOOR_TO_FLOOR_HEIGHT`,
 `MULTI_FLOOR_SLAB_THICKNESS`, `MULTI_FLOOR_CLEAR_HEIGHT`, `STAIR_CORE_WIDTH`,
@@ -117,23 +117,38 @@ Stairs occupy existing living rooms (falling back to bedrooms where needed),
 not a synthetic stairwell room. Exterior doors are generated only on the ground
 floor; an agent starting room may be selected from any floor.
 
-The generator locates the shared core during bounded complete-structure
-sampling and reserves it before furnishing. It retries at most
+The generator makes the shared stair volume a constraint of the room partition,
+not a feature fitted after independently sampled layouts. It enumerates one
+grid-aligned reservation large enough for the `1.2 m x 6.5 m` core and its
+`0.8 m` furnishing clearance, assigns that same reservation to the selected
+host room on every floor, rebuilds the exact room walls, and accepts the
+partition only if every room remains four-connected. It then locates the core
+inside that reservation and reserves it before furnishing. It retries at most
 `MULTI_FLOOR_MAX_STRUCTURE_ATTEMPTS` (`50`) complete aligned structures.
 Exhausting that bound raises `InvalidMultiFloorPlan` rather than returning a
 partially valid house.
+When the generator uses an implicit house-spec sampler, a rejected structural
+attempt also advances to another specification with the requested floor count.
+An explicitly supplied `HouseSpec` remains fixed across retries.
 
-Each aligned attempt samples floor doors first, subtracts the exact padded
-doorway/open-wall clearance polygons from the candidate stair-host regions, and
-then refits the shared core across those doorway-safe regions. If no shared
-doorway-safe fit remains, the generator rejects and retries the entire aligned
-attempt.
+Each aligned attempt fixes the core inside the shared reservation before door
+sampling. It then subtracts the exact padded doorway/open-wall clearance
+polygons from the stair-host regions and proves that the same core and all its
+landing and furnishing clearances remain covered. If a door intrudes, the
+generator rejects and retries the entire aligned attempt instead of moving the
+stair after the room partition has been established.
+
+The shared stair placement requires three unobstructed `0.6 m` room aprons at
+every lower and upper landing: one beyond the exposed end and one beyond each
+lateral edge. In a three-floor house, the middle stair-host room must satisfy
+the three-sided requirement for both its incoming upper landing and outgoing
+lower landing. A core against a wall, doorway clearance, or room boundary is
+therefore rejected even if one direction would remain usable.
 
 Immediately before floor-object placement, the stair host room also reserves a
-square-cornered `0.8 m` apron around the entire core. The runtime can connect
-through either lateral landing edge or the exposed end edge and samples
-room-side points at offsets up to `0.8 m`; preserving this apron prevents
-furniture from blocking every valid egress.
+square-cornered `0.8 m` apron around the entire core. This preserves all three
+physical landing approaches during furnishing rather than selecting one
+preferred entrance.
 
 ## Schema 2 output
 
@@ -152,6 +167,9 @@ schema `2.0.0` (`MULTI_FLOOR_SCHEMA`). The schema-2 additions are:
 Rooms, walls, doors, windows, lights, and objects otherwise remain flat arrays.
 Structural IDs for exteriors, surfaces, openings, landings, and connectors are
 deterministic and floor-qualified.
+Physical orthogonal floor and ceiling cells are merged across complete shared
+edges before serialization. Stair-host surfaces prioritize merges perpendicular
+to the core axis, reducing unnecessary collider seams around the opening.
 
 Schema-2 generation currently runs as one complete operation:
 `next_sampling_stage` must remain `NextSamplingStage.STRUCTURE`, and legacy
@@ -171,23 +189,25 @@ to that revision and rebuild AI2-THOR. See the companion
 for engine-side schema behavior and the required curated stair prefab contract.
 
 The patched engine advertises supported house schemas, creates schema-2 slabs
-and ceilings at their supplied world-space elevations, places structural stairs
-before navmesh construction, and replaces the stair prefab's invisible ramp mesh
-with one connected lower-landing/ramp/upper-landing collider. Navmesh baking
-excludes trigger volumes, caps physics-collider `minRegionArea` at `0.05`,
-and tags physical floor surfaces for height raycasts. Every internal doorway
-receives a sampled bidirectional zero-width link per active agent type so the
-two room surfaces remain connected while physical colliders still gate motion.
-Required bidirectional links connect room surfaces to inset ramp anchors for
-every active agent type. Additional locally adjacent links are sampled at three
-positions across both lateral edges and the exposed end edge of each landing
-where both surfaces exist. A short link bridges the ramp mesh seam, and scene
-creation requires a complete lower-to-upper navmesh path. Standard movement
-uses physical floor/stair heights plus bounded
-forward lookahead to cross those links and requires support beneath the
-horizontal action target. The lower ceiling and upper floor retain full-core
-1.2 m by 6.5 m openings. An unpatched engine is rejected by the capability
-preflight rather than silently flattening the scene.
+and ceilings at their supplied world-space elevations, and places structural
+stairs before navmesh construction. It replaces the stair prefab's invisible
+ramp with one physical lower-landing/ramp/upper-landing mesh extended by the
+three serialized `0.6 m` landing aprons at both ends. For each storey, every
+serialized room-floor surface is also combined into one navmesh-only floor
+collider; the semantic render, receptacle, and physics pieces remain separate
+but do not independently fragment the bake at room or doorway seams.
+
+Navmesh baking excludes trigger volumes, retains the configured disconnected-
+region filtering, and uses only those continuous physical sources. It does not
+create runtime stair, landing, or doorway links. The lower ceiling and upper floor
+retain full-core `1.2 m x 6.5 m` openings. `House.validate` then calls
+`GetNavMeshConnectivity`, which classifies every triangle in the selected agent
+navmesh using complete `NavMesh.CalculatePath` results. Dataset generation
+rejects the house unless the component count is exactly one. Consequently,
+long-distance cross-room and cross-floor endpoint pairs remain available to a
+downstream task sampler without endpoint resampling, semantic connector
+waypoints, or fallback trajectories. An unpatched engine is rejected by the
+capability preflight rather than silently flattening the scene.
 
 ## Generate the mixed-floor dataset
 

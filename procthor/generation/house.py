@@ -5,7 +5,7 @@ import logging
 import random
 from collections import Counter
 from functools import total_ordering
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 from ai2thor.controller import Controller
@@ -22,6 +22,7 @@ from procthor.constants import (
     SCHEMA,
 )
 from procthor.generation.agent import (
+    AGENT_NAVMESH_RADIUS,
     AGENT_Y_HEIGHT,
     AgentPose,
     generate_starting_pose,
@@ -88,6 +89,9 @@ class House:
                 "schema": MULTI_FLOOR_SCHEMA,
                 "ai2thorCommit": MULTI_FLOOR_AI2THOR_COMMIT,
             }
+        self.data["metadata"]["navMeshes"] = [
+            {"id": 0, "agentRadius": AGENT_NAVMESH_RADIUS}
+        ]
 
     def to_json(self, filename: Optional[str] = None, compressed: bool = False) -> str:
         json_rep = json.dumps(self.data, sort_keys=True, indent=4)
@@ -155,6 +159,25 @@ class House:
             self.data["metadata"]["warnings"] = warnings
             return warnings
         rps = event.metadata["actionReturn"]
+
+        connectivity_event = controller.step(
+            action="GetNavMeshConnectivity", renderImage=False
+        )
+        connectivity_metadata = getattr(connectivity_event, "metadata", {})
+        connectivity = connectivity_metadata.get("actionReturn")
+        if not isinstance(connectivity, Mapping):
+            error_message = connectivity_metadata.get("errorMessage")
+            warnings["GetNavMeshConnectivity"] = (
+                "Failed to inspect the complete navmesh"
+                + (": {}".format(error_message) if error_message else ".")
+            )
+        elif not connectivity.get("connected", False):
+            warnings["NavMeshNotConnected"] = (
+                "Navmesh has {} components with triangle counts {}."
+            ).format(
+                connectivity.get("componentCount"),
+                connectivity.get("componentSizes"),
+            )
 
         random.shuffle(rps)
 

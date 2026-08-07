@@ -37,6 +37,7 @@ STAIR_CORE_WIDTH = 1.2
 STAIR_CORE_LENGTH = 6.5
 STAIR_WIDTH = 1.0
 STAIR_RUN = 4.5
+STAIR_LANDING_EGRESS_DEPTH = 0.6
 MULTI_FLOOR_STAIR_ASSET_ID = "Staircase_Straight_3m_1m_4_5m"
 """Reference stair contract shared by ProcTHOR and the AI2-THOR patch."""
 

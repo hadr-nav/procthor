@@ -19,6 +19,15 @@ GRID_SIZE = 0.25
 AGENT_Y_HEIGHT = 0.95
 """This is the position that allows the agent to teleport on the ground."""
 
+AGENT_COLLIDER_RADIUS = 0.2
+"""Horizontal radius of the default AI2-THOR agent capsule."""
+
+NAVMESH_CLEARANCE_MARGIN = 0.08
+"""Fixed clearance beyond the agent capsule reserved during navmesh baking."""
+
+AGENT_NAVMESH_RADIUS = AGENT_COLLIDER_RADIUS + NAVMESH_CLEARANCE_MARGIN
+"""Conservative geometry envelope baked into every generated scene."""
+
 
 class AgentPose(TypedDict):
     """The full pose of the agent, used for `TeleportFull`."""

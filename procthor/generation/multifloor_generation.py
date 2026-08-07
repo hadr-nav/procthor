@@ -8,6 +8,7 @@ coordinates existing generation functions one horizontal floor at a time.
 import copy
 import itertools
 import logging
+import math
 import random
 from collections import defaultdict
 from numbers import Integral
@@ -27,6 +28,7 @@ from procthor.constants import (
     MULTI_FLOOR_STAIR_ASSET_ID,
     OUTDOOR_ROOM_ID,
     PROCTHOR_INITIALIZATION,
+    STAIR_LANDING_EGRESS_DEPTH,
 )
 from procthor.utils.types import (
     InvalidFloorplan,
@@ -37,7 +39,13 @@ from procthor.utils.types import (
     SamplingVars,
 )
 
-from .generation import get_floor_polygons
+from .generation import (
+    consolidate_walls,
+    find_walls,
+    get_floor_polygons,
+    get_xz_poly_map,
+    scale_boundary_groups,
+)
 from .house import House, NextSamplingStage, PartialHouse
 from .layer import assign_layer_to_rooms
 from .materials import randomize_wall_and_floor_materials
@@ -248,7 +256,63 @@ def _axis_order(geometry: Any) -> List[str]:
     return ["z", "x"]
 
 
-def _fit_core_in_geometry(geometry: Any) -> Optional[StairCore]:
+def _landing_egress_polygons(candidate: Any, long_axis: str) -> Tuple[Any, Any]:
+    """Return the three required host-room aprons at each stair landing."""
+
+    min_x, min_z, max_x, max_z = candidate.bounds
+    landing_depth = DEFAULT_STAIR_GEOMETRY.landing_depth
+    egress = STAIR_LANDING_EGRESS_DEPTH
+    if long_axis == "z":
+        return (
+            (
+                box(min_x, min_z - egress, max_x, min_z),
+                box(min_x - egress, min_z, min_x, min_z + landing_depth),
+                box(max_x, min_z, max_x + egress, min_z + landing_depth),
+            ),
+            (
+                box(min_x, max_z, max_x, max_z + egress),
+                box(min_x - egress, max_z - landing_depth, min_x, max_z),
+                box(max_x, max_z - landing_depth, max_x + egress, max_z),
+            ),
+        )
+
+    return (
+        (
+            box(min_x - egress, min_z, min_x, max_z),
+            box(min_x, min_z - egress, min_x + landing_depth, min_z),
+            box(min_x, max_z, min_x + landing_depth, max_z + egress),
+        ),
+        (
+            box(max_x, min_z, max_x + egress, max_z),
+            box(max_x - landing_depth, min_z - egress, max_x, min_z),
+            box(max_x - landing_depth, max_z, max_x, max_z + egress),
+        ),
+    )
+
+
+def _has_required_landing_egress(
+    lower_geometries: Sequence[Any],
+    upper_geometries: Sequence[Any],
+    candidate: Any,
+    long_axis: str,
+) -> bool:
+    lower_egress, upper_egress = _landing_egress_polygons(candidate, long_axis)
+    return all(
+        geometry.covers(apron)
+        for geometry in lower_geometries
+        for apron in lower_egress
+    ) and all(
+        geometry.covers(apron)
+        for geometry in upper_geometries
+        for apron in upper_egress
+    )
+
+
+def _fit_core_in_geometry(
+    geometry: Any,
+    lower_egress_geometries: Sequence[Any] = (),
+    upper_egress_geometries: Sequence[Any] = (),
+) -> Optional[StairCore]:
     """Find a deterministic axis-aligned core contained by ``geometry``."""
 
     if geometry.is_empty:
@@ -294,16 +358,35 @@ def _fit_core_in_geometry(geometry: Any) -> Optional[StairCore]:
         candidates = []
         for lower_x, lower_z in itertools.product(lower_xs, lower_zs):
             candidate = box(lower_x, lower_z, lower_x + size_x, lower_z + size_z)
-            if safe_geometry.covers(candidate):
-                center = candidate.centroid
-                candidates.append(
-                    (
-                        (center.x - centroid.x) ** 2 + (center.y - centroid.y) ** 2,
-                        lower_x,
-                        lower_z,
-                        candidate,
-                    )
+            if not safe_geometry.covers(candidate):
+                continue
+            lower_hosts = lower_egress_geometries or (safe_geometry,)
+            upper_hosts = upper_egress_geometries or (safe_geometry,)
+            if not _has_required_landing_egress(
+                lower_hosts,
+                upper_hosts,
+                candidate,
+                long_axis,
+            ):
+                continue
+            object_clearance = candidate.buffer(
+                _STAIR_OBJECT_CLEARANCE,
+                join_style=2,
+            )
+            if not all(
+                host_geometry.covers(object_clearance)
+                for host_geometry in tuple(lower_hosts) + tuple(upper_hosts)
+            ):
+                continue
+            center = candidate.centroid
+            candidates.append(
+                (
+                    (center.x - centroid.x) ** 2 + (center.y - centroid.y) ** 2,
+                    lower_x,
+                    lower_z,
+                    candidate,
                 )
+            )
         if candidates:
             _, _, _, candidate = min(candidates, key=lambda item: item[:3])
             bounds = candidate.bounds
@@ -350,19 +433,27 @@ def _locate_shared_stair_core(
 
     for combination in combinations:
         host_ids = [room_number for _, room_number in combination]
-        shared = floor_polygons[0][host_ids[0]]
-        if door_clearance_polygons is not None:
-            for clearance in door_clearance_polygons[0].get(host_ids[0], ()):
-                shared = shared.difference(clearance)
-        for floor_index, host_id in enumerate(host_ids[1:], start=1):
+        host_geometries = []
+        for floor_index, host_id in enumerate(host_ids):
             floor_geometry = floor_polygons[floor_index][host_id]
             if door_clearance_polygons is not None:
                 for clearance in door_clearance_polygons[floor_index].get(host_id, ()):
                     floor_geometry = floor_geometry.difference(clearance)
+            host_geometries.append(floor_geometry)
+
+        shared = host_geometries[0]
+        for floor_geometry in host_geometries[1:]:
             shared = shared.intersection(floor_geometry)
             if shared.is_empty:
                 break
-        core = _fit_core_in_geometry(shared)
+        if shared.is_empty:
+            continue
+
+        core = _fit_core_in_geometry(
+            shared,
+            lower_egress_geometries=tuple(host_geometries[:-1]),
+            upper_egress_geometries=tuple(host_geometries[1:]),
+        )
         if core is not None:
             return core, host_ids
     if door_clearance_polygons is not None:
@@ -373,6 +464,292 @@ def _locate_shared_stair_core(
     raise StairCoreDoesNotFit(
         "no shared 1.2 x 6.5 m stair core fits the selected host rooms"
     )
+
+
+def _grid_region_is_connected(grid: np.ndarray, room_number: int) -> bool:
+    coordinates = np.argwhere(grid == room_number)
+    if not len(coordinates):
+        return False
+    start = tuple(int(value) for value in coordinates[0])
+    visited = {start}
+    frontier = [start]
+    height, width = grid.shape
+    while frontier:
+        row, column = frontier.pop()
+        for candidate in (
+            (row - 1, column),
+            (row + 1, column),
+            (row, column - 1),
+            (row, column + 1),
+        ):
+            candidate_row, candidate_column = candidate
+            if (
+                0 <= candidate_row < height
+                and 0 <= candidate_column < width
+                and candidate not in visited
+                and grid[candidate] == room_number
+            ):
+                visited.add(candidate)
+                frontier.append(candidate)
+    return len(visited) == len(coordinates)
+
+
+def _validate_reserved_stair_core(
+    core: StairCore,
+    host_ids: Sequence[int],
+    structures: Sequence[Any],
+    door_clearance_polygons: Optional[Sequence[Mapping[int, Sequence[Polygon]]]] = None,
+) -> Tuple[StairCore, List[int]]:
+    """Prove that the fixed structural core remains clear after door sampling."""
+
+    if len(host_ids) != len(structures):
+        raise MultiFloorGeometryError(
+            "stair host ids must contain one room id per floor"
+        )
+    if door_clearance_polygons is not None and len(door_clearance_polygons) != len(
+        structures
+    ):
+        raise MultiFloorGeometryError(
+            "door_clearance_polygons must contain one mapping per floor"
+        )
+
+    floor_polygons = _room_polygons(structures)
+    host_geometries = []
+    for floor_index, host_id in enumerate(host_ids):
+        geometry = floor_polygons[floor_index][host_id]
+        if door_clearance_polygons is not None:
+            for clearance in door_clearance_polygons[floor_index].get(host_id, ()):
+                geometry = geometry.difference(clearance)
+        host_geometries.append(geometry)
+
+    candidate = box(*core.bounds.as_tuple())
+    lower_hosts = tuple(host_geometries[:-1])
+    upper_hosts = tuple(host_geometries[1:])
+    object_clearance = candidate.buffer(_STAIR_OBJECT_CLEARANCE, join_style=2)
+    if (
+        not all(geometry.covers(candidate) for geometry in host_geometries)
+        or not _has_required_landing_egress(
+            lower_hosts,
+            upper_hosts,
+            candidate,
+            core.long_axis,
+        )
+        or not all(
+            geometry.covers(object_clearance) for geometry in host_geometries
+        )
+    ):
+        raise StairCoreDoesNotFit(
+            "the reserved stair core or one of its three-sided landing "
+            "clearances intersects a room or doorway boundary"
+        )
+    return core, list(host_ids)
+
+
+def _rebuild_structure_from_grid(
+    structure: Any,
+    grid: np.ndarray,
+    room_ids: Set[int],
+    interior_boundary_scale: float,
+) -> Any:
+    """Rebuild exact wall and polygon records after a constrained partition."""
+
+    rebuilt = copy.deepcopy(structure)
+    floorplan = np.pad(
+        grid,
+        pad_width=1,
+        mode="constant",
+        constant_values=OUTDOOR_ROOM_ID,
+    )
+    rowcol_walls = find_walls(floorplan=floorplan)
+    boundary_groups = consolidate_walls(walls=rowcol_walls)
+    boundary_groups = scale_boundary_groups(
+        boundary_groups=boundary_groups,
+        scale=interior_boundary_scale,
+    )
+    rebuilt.floorplan = floorplan
+    rebuilt.rowcol_walls = rowcol_walls
+    rebuilt.boundary_groups = boundary_groups
+    rebuilt.xz_poly_map = get_xz_poly_map(
+        boundary_groups=boundary_groups,
+        room_ids=room_ids,
+    )
+    return rebuilt
+
+
+def _reserve_shared_stair_host_region(
+    house_spec: HouseSpec,
+    remapped_room_specs: Sequence[RoomSpec],
+    room_id_maps: Sequence[Mapping[int, int]],
+    structures: Sequence[Any],
+    interior_boundary_scale: float,
+) -> Tuple[List[Any], StairCore, List[int]]:
+    """Constrain every floor partition around one shared stair-host region.
+
+    The ordinary floorplan sampler partitions each floor independently.  This
+    helper makes the stair volume a first-class structural constraint: it
+    enumerates grid-aligned reservations large enough for the core and its
+    furnishing clearance, assigns the same reservation to each selected host,
+    and accepts only assignments that leave every room four-connected.
+    """
+
+    if not structures:
+        raise StairCoreDoesNotFit("multi-floor generation returned no structures")
+    boundary = np.asarray(structures[0].interior_boundary)
+    if boundary.ndim != 2:
+        raise MultiFloorGeometryError("interior boundary must be a 2D grid")
+    if not math.isfinite(interior_boundary_scale) or interior_boundary_scale <= 0:
+        raise MultiFloorGeometryError(
+            "interior_boundary_scale must be a positive finite number"
+        )
+
+    floor_grids = []
+    for structure in structures:
+        grid = np.asarray(structure.floorplan)[1:-1, 1:-1]
+        if grid.shape != boundary.shape:
+            raise MultiFloorGeometryError(
+                "all floorplans must match the shared interior boundary"
+            )
+        floor_grids.append(grid)
+
+    candidates_per_floor = _host_candidates(
+        house_spec=house_spec,
+        remapped_room_specs=remapped_room_specs,
+        room_id_maps=room_id_maps,
+    )
+    combinations = list(itertools.product(*candidates_per_floor))
+    combinations.sort(
+        key=lambda combination: (
+            sum(preference for preference, _ in combination),
+            tuple(preference for preference, _ in combination),
+            tuple(room_number for _, room_number in combination),
+        )
+    )
+
+    reserved_short = DEFAULT_STAIR_GEOMETRY.core_width + 2 * _STAIR_OBJECT_CLEARANCE
+    reserved_long = DEFAULT_STAIR_GEOMETRY.core_length + 2 * _STAIR_OBJECT_CLEARANCE
+    short_cells = int(math.ceil(reserved_short / interior_boundary_scale))
+    long_cells = int(math.ceil(reserved_long / interior_boundary_scale))
+    height, width = boundary.shape
+    boundary_center = ((height - 1) / 2.0, (width - 1) / 2.0)
+    valid = []
+
+    for long_axis, reservation_width, reservation_height in (
+        # ProcTHOR's floorplan row coordinate becomes world x, while its
+        # column coordinate becomes world z during wall reconstruction.
+        ("z", long_cells, short_cells),
+        ("x", short_cells, long_cells),
+    ):
+        if reservation_width > width or reservation_height > height:
+            continue
+        for row in range(height - reservation_height + 1):
+            for column in range(width - reservation_width + 1):
+                row_slice = slice(row, row + reservation_height)
+                column_slice = slice(column, column + reservation_width)
+                if np.any(boundary[row_slice, column_slice] == OUTDOOR_ROOM_ID):
+                    continue
+                for combination in combinations:
+                    host_ids = [room_number for _, room_number in combination]
+                    rebuilt_structures = []
+                    reassigned_cells = 0
+                    for grid, host_id, room_spec, structure in zip(
+                        floor_grids,
+                        host_ids,
+                        remapped_room_specs,
+                        structures,
+                    ):
+                        constrained = grid.copy()
+                        reassigned_cells += int(
+                            np.count_nonzero(
+                                constrained[row_slice, column_slice] != host_id
+                            )
+                        )
+                        constrained[row_slice, column_slice] = host_id
+                        room_ids = set(room_spec.room_type_map)
+                        if not all(
+                            _grid_region_is_connected(constrained, room_number)
+                            for room_number in room_ids
+                        ):
+                            break
+                        try:
+                            rebuilt = _rebuild_structure_from_grid(
+                                structure=structure,
+                                grid=constrained,
+                                room_ids=room_ids,
+                                interior_boundary_scale=interior_boundary_scale,
+                            )
+                        except Exception as error:
+                            if not str(error).startswith("No connecting wall for"):
+                                raise
+                            break
+                        try:
+                            _room_polygons([rebuilt])
+                        except MultiFloorGeometryError:
+                            break
+                        rebuilt_structures.append(rebuilt)
+                    if len(rebuilt_structures) != len(structures):
+                        continue
+                    reservation_center = (
+                        row + (reservation_height - 1) / 2.0,
+                        column + (reservation_width - 1) / 2.0,
+                    )
+                    center_x = (
+                        row + reservation_height / 2.0
+                    ) * interior_boundary_scale
+                    center_z = (
+                        column + reservation_width / 2.0
+                    ) * interior_boundary_scale
+                    half_x = (
+                        DEFAULT_STAIR_GEOMETRY.core_length / 2.0
+                        if long_axis == "x"
+                        else DEFAULT_STAIR_GEOMETRY.core_width / 2.0
+                    )
+                    half_z = (
+                        DEFAULT_STAIR_GEOMETRY.core_width / 2.0
+                        if long_axis == "x"
+                        else DEFAULT_STAIR_GEOMETRY.core_length / 2.0
+                    )
+                    core = StairCore(
+                        bounds=Rectangle(
+                            center_x - half_x,
+                            center_z - half_z,
+                            center_x + half_x,
+                            center_z + half_z,
+                        ),
+                        long_axis=long_axis,
+                        yaw=90.0 if long_axis == "x" else 0.0,
+                    )
+                    try:
+                        _validate_reserved_stair_core(
+                            core=core,
+                            host_ids=host_ids,
+                            structures=rebuilt_structures,
+                        )
+                    except StairCoreDoesNotFit:
+                        continue
+                    center_distance = (
+                        (reservation_center[0] - boundary_center[0]) ** 2
+                        + (reservation_center[1] - boundary_center[1]) ** 2
+                    )
+                    valid.append(
+                        (
+                            sum(preference for preference, _ in combination),
+                            reassigned_cells,
+                            center_distance,
+                            0 if long_axis == "z" else 1,
+                            row,
+                            column,
+                            rebuilt_structures,
+                            core,
+                            host_ids,
+                        )
+                    )
+
+    if not valid:
+        raise StairCoreDoesNotFit(
+            "no connected shared stair-host reservation fits every floor partition"
+        )
+    selected = min(valid, key=lambda candidate: candidate[:6])
+    return selected[6], selected[7], selected[8]
 
 
 def _shared_dims_value(house_spec: HouseSpec) -> Optional[Tuple[int, int]]:
@@ -460,11 +837,12 @@ def sample_complete_multifloor_structure(
                 if shared_boundary is None:
                     shared_boundary = copy.deepcopy(structure.interior_boundary)
 
-            core, stair_host_room_ids = _locate_shared_stair_core(
+            structures, core, stair_host_room_ids = _reserve_shared_stair_host_region(
                 house_spec=house_spec,
                 remapped_room_specs=remapped_room_specs,
                 room_id_maps=room_id_maps,
                 structures=structures,
+                interior_boundary_scale=sampling_vars.interior_boundary_scale,
             )
             partial_houses = [
                 PartialHouse.from_structure_and_room_spec(
@@ -642,10 +1020,9 @@ def _run_floor_generation_stages(
                 stair_host_room_id, floor_index
             )
         )
-    # Keep furniture away from every possible stair egress. Runtime NavMesh
-    # links choose whichever exposed landing edge survives room-shape and wall
-    # erosion, so object placement must preserve a short clear apron around the
-    # entire core rather than only the opening itself.
+    # Keep furniture away from the front and both side approaches at every
+    # landing. The runtime mesh exposes all three physical directions, so the
+    # generated room must preserve them rather than choosing one entrance.
     stair_object_reservation = box(*stair_core.bounds.as_tuple()).buffer(
         _STAIR_OBJECT_CLEARANCE,
         join_style=2,
@@ -793,7 +1170,39 @@ def _qualify_floor_ids(partial_house: PartialHouse, floor_index: int) -> None:
             light["floorId"] = owner_floor_id
 
 
-def _polygon_parts(geometry: Any) -> List[Polygon]:
+def _merge_surface_rectangles(
+    rectangles: Sequence[Polygon], axis: str
+) -> List[Polygon]:
+    """Merge cells that share a complete edge along one axis."""
+
+    if axis not in {"x", "z"}:
+        raise ValueError("surface rectangle merge axis must be 'x' or 'z'")
+    grouped = defaultdict(list)
+    for rectangle in rectangles:
+        min_x, min_z, max_x, max_z = rectangle.bounds
+        key = (min_z, max_z) if axis == "x" else (min_x, max_x)
+        grouped[key].append((min_x, min_z, max_x, max_z))
+
+    merged = []
+    sort_index = 0 if axis == "x" else 1
+    near_index = 2 if axis == "x" else 3
+    far_index = 0 if axis == "x" else 1
+    for bounds in sorted(grouped):
+        ordered = sorted(grouped[bounds], key=lambda item: item[sort_index])
+        current = list(ordered[0])
+        for candidate in ordered[1:]:
+            if abs(current[near_index] - candidate[far_index]) <= _GEOMETRY_EPSILON:
+                current[near_index] = candidate[near_index]
+            else:
+                merged.append(box(*current))
+                current = list(candidate)
+        merged.append(box(*current))
+    return merged
+
+
+def _polygon_parts(
+    geometry: Any, preferred_merge_axis: str = "x"
+) -> List[Polygon]:
     if geometry.is_empty:
         return []
     xs, zs = _geometry_coordinates(geometry)
@@ -816,6 +1225,16 @@ def _polygon_parts(geometry: Any) -> List[Polygon]:
         raise InvalidMultiFloorPlan(
             "Physical floor and ceiling surfaces must be orthogonal polygons."
         )
+    merge_axes = (
+        preferred_merge_axis,
+        "z" if preferred_merge_axis == "x" else "x",
+    )
+    while True:
+        previous_count = len(parts)
+        for axis in merge_axes:
+            parts = _merge_surface_rectangles(parts, axis)
+        if len(parts) == previous_count:
+            break
     parts.sort(key=lambda polygon: (polygon.bounds, polygon.area))
     return parts
 
@@ -849,9 +1268,17 @@ def _surface_objects(
         if surface_type == "floor"
         else floor_ceiling_y(floor_index)
     )
+    preferred_merge_axis = "x"
+    if opening is not None:
+        min_x, min_z, max_x, max_z = opening.bounds
+        if max_x - min_x > max_z - min_z:
+            preferred_merge_axis = "z"
     polygons = [
         polygon
-        for polygon in _polygon_parts(physical_geometry)
+        for polygon in _polygon_parts(
+            physical_geometry,
+            preferred_merge_axis=preferred_merge_axis,
+        )
         if _is_serializable_surface_piece(polygon)
     ]
     surfaces = []
@@ -1114,13 +1541,9 @@ def sample_multifloor_house(
                 )
             ]
             if candidate_context.partial_houses:
-                core, stair_host_room_ids = _locate_shared_stair_core(
-                    house_spec=candidate_context.house_spec,
-                    remapped_room_specs=[
-                        partial_house.room_spec
-                        for partial_house in candidate_context.partial_houses
-                    ],
-                    room_id_maps=candidate_context.room_id_maps,
+                core, stair_host_room_ids = _validate_reserved_stair_core(
+                    core=candidate_context.stair_core,
+                    host_ids=candidate_context.stair_host_room_ids,
                     structures=[
                         partial_house.house_structure
                         for partial_house in candidate_context.partial_houses
@@ -1138,6 +1561,8 @@ def sample_multifloor_house(
             MultiFloorGeometryError,
         ) as error:
             last_error = error
+            if getattr(generator, "house_spec", None) is None:
+                house_spec = _select_house_spec(generator)
     if context is None:
         raise InvalidMultiFloorPlan(
             "Failed to generate a doorway-safe aligned {}-floor house in {} "

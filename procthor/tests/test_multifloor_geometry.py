@@ -160,6 +160,10 @@ class MultiFloorGeometryTests(unittest.TestCase):
         self.assertEqual([item["rotation"]["y"] for item in connectors], [0.0, 0.0])
         self.assertEqual([item["position"]["y"] for item in connectors], [0.0, 3.0])
         for connector_index, connector in enumerate(connectors):
+            self.assertEqual(
+                connector["assetContract"]["landingEgressDepth"],
+                multifloor.STAIR_LANDING_EGRESS_DEPTH,
+            )
             openings = {
                 (opening["floorId"], opening["surfaceType"]): opening
                 for opening in connector["openingPolygons"]

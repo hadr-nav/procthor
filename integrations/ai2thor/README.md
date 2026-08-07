@@ -37,40 +37,32 @@ Schema `2.0.0` adds:
   serializer;
 - preflight validation of floor/connector topology, surface non-overlap,
   opening clearance, flattened copies, and prefab geometry before scene mutation;
-- one slab collider and receptacle per rectangular floor surface, leaving the
+- one slab collider and receptacle per rectangular semantic floor surface,
+  plus one consolidated navmesh-only floor collider per storey, leaving the
   complete 1.2 m by 6.5 m reserved stair core open in the lower ceiling and
   upper floor instead of covering it with a global rectangle;
 - explicit per-piece ceiling meshes instead of one global-height ceiling;
 - structural stair spawning before navmesh baking, including replacement of the
-  authored ramp collider mesh with one shared-vertex lower-landing/ramp/upper-
-  landing surface;
-- schema-2 navmeshes collected from non-trigger physics colliders with every
+  authored ramp collider mesh with one lower-landing/ramp/upper-landing surface
+  extended through the exposed end and both lateral edges at every landing;
+- all procedural navmeshes collected from the same non-trigger physics
+  colliders used by movement, with every schema-2
   effective agent slope clamped at least 0.5 degrees above the serialized ramp
-  slope and `minRegionArea` capped at `0.05`;
-- sampled, bidirectional zero-width links across every internal doorway for
-  each active navmesh agent type, restoring room-to-room connectivity while
-  leaving physical door and wall colliders authoritative for movement;
-- required bidirectional zero-width links from room surfaces to inset ramp
-  anchors, additional locally adjacent links sampled at three positions across
-  both lateral edges and the exposed end edge of each landing, and a short link
-  across the ramp mesh seam for every active navmesh agent type; candidate
-  landing links that cross a physical wall are rejected using explicit
-  `StructureObjectTag.Wall` tags, and scene creation rejects a connector unless
-  the resulting navmesh has a complete
-  lower-to-upper path;
+  slope; the configured disconnected-region threshold is retained so tiny
+  isolated islands are removed instead of being preserved for the stair;
+- a link-free physical navmesh: no synthetic doorway, landing, ramp-seam, or
+  connector links are created;
+- `GetNavMeshConnectivity`, which selects one agent type, covers every baked
+  triangle, and reports exact path-connected component sizes;
 - navmesh-based schema-2 reachable positions containing distinct floor y
   values;
 - schema-2 shortest-path endpoint sampling preserves each requested y instead
   of flattening both endpoints to one floor;
-- optional `targetY` is propagated through remote `MoveAhead`, and schema-2
-  discrete movement is projected using physical floor/stair height
-  raycasts, with bounded `0.25`/`0.5`/`0.75` m forward lookahead and a
-  local path-length cap of `5×` the action distance plus `0.1` m, allowing
-  standard movement actions to cross landing links and ascend or descend only
-  when the horizontal action target has physical floor or stair support; and
+- optional `targetY` is propagated through remote `MoveAhead`, allowing
+  standard movement to follow the height of the continuous physical navmesh;
+  and
 - a `VerticalConnectorAsset` marker that validates the ramp, exact landing
-  anchors, and both 1.2 m by 1.0 m platform colliders, then owns the runtime
-  navmesh-link lifecycle.
+  anchors, and both 1.2 m by 1.0 m platform colliders.
 
 The schema-2 wire types are intentionally richer than schema 1:
 
@@ -89,8 +81,10 @@ those pieces before serialization.
 
 Before floor-object placement, ProcTHOR subtracts a square-cornered `0.8 m`
 buffer around the complete reserved core from the stair host room's open
-polygon. This keeps every possible room-side landing egress clear for the
-runtime link sampler, including its farthest `0.8 m` query offset.
+polygon. This keeps the front and both lateral approaches physically clear.
+The reservation is applied while constraining the grid partition on every
+floor, and the partition is rejected if reassigning it would empty or split any
+room.
 
 ## Curated production asset
 
@@ -113,8 +107,7 @@ particular:
    navmesh sources; the engine replaces the authored ramp mesh with one
    connected landing/ramp/landing collision mesh before baking.
 6. The root has `VerticalConnectorAsset`, with references to the ramp, both
-   platform objects, and both landing anchors. It also owns every runtime
-   navmesh link and removes valid instances when destroyed.
+   platform objects, and both landing anchors.
 7. Visual steps and rails do not contribute walkable navmesh geometry. The
    patch marks the root Not Walkable and the walkable hierarchy Walkable.
 8. Register the prefab in the Procedural scene's
@@ -145,30 +138,28 @@ registered:
    landing/ramp/landing mesh, its separate platform colliders are ignored by the
    bake, its visual hierarchy is Not Walkable, trigger colliders are excluded,
    the surface uses `PhysicsColliders`, and every effective agent slope is at
-   least `34.1900675` degrees while `minRegionArea <= 0.05`. After baking,
-   assert required room-to-ramp links exist, additional locally adjacent links
-   are created wherever both sides sample successfully at three positions
-   across each landing edge, the ramp mesh seam is bridged, and the result is a
-   complete lower-to-upper navmesh path for every active agent type.
-6. Unity PlayMode: assert every internal doorway has one sampled bidirectional
-   link per active agent type and that links are removed with their owning door.
+   least `34.1900675` degrees while retaining the configured `minRegionArea`.
+   Assert the connected mesh includes a `0.6 m` end apron and two
+   `0.6 m x 1.0 m` side aprons at both landings. Assert every room-floor piece
+   is represented in exactly one consolidated floor source for its storey and
+   the result has no runtime `NavMeshLink` instances.
+6. Controller integration: `GetNavMeshConnectivity` returns one component and
+   a component size equal to the complete selected-navmesh triangle count.
 7. Controller integration: `GetReachablePositions` from either floor returns
    positions near both base y values and `GetShortestPath` completes across
    the stair and at least 0.5 m beyond the complete stair envelope; repeated
    standard movement actions leave the stair for the upper room and traverse it
-   in both directions while physical floor/stair raycasts drive the returned
-   agent y. Exercise direct and link-lookahead projections, reject unsupported
-   horizontal targets, and reject paths over the configured `5× + 0.1 m` local
-   cap.
-8. Repeat for three floors and assert the second stair is yaw-rotated 180
-   degrees.
+   in both directions. Repeat the path assertion from the front, left, and right
+   approach of both landings.
+8. Repeat for three floors and assert both flights retain the shared parallel
+   orientation and the middle floor remains connected to each flight.
 9. Negative cases: missing prefab, scaled or mis-parented ramp, malformed or
    offset platform colliders, duplicate/missing adjacent connector pairs,
    overlapping or opening-covering surfaces, inconsistent flattened copies,
    invalid materials, non-adjacent floor IDs, and unsupported schema all fail
    before scene mutation.
 
-This artifact was prepared against the pinned source checkout and clean-applies
-there. The patched Unity player was built and exercised through AI2-THOR on 100
-ProcTHOR scenes; all 100 completed A* waypoint following with zero collisions.
-The separate EditMode and PlayMode suites above remain required.
+This artifact is prepared against the pinned source checkout and clean-applies
+there. Runtime verification evidence for the current integration is recorded in
+the repository change that updates this artifact; the separate EditMode and
+PlayMode suites above remain required.
