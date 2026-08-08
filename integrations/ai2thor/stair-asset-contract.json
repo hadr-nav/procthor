@@ -16,6 +16,7 @@
     "reservedWidth": 1.2,
     "reservedLength": 6.5,
     "landingDepth": 1.0,
+    "landingEgressDepth": 0.6,
     "maximumRampSlopeDegrees": 33.6900675
   },
   "component": {
@@ -82,13 +83,21 @@
     "replacesAuthoredRampMesh": true,
     "type": "MeshCollider",
     "meshName": "ConnectedStairLandingRampCollider",
-    "sharedVertexSurfaceSegments": [
+    "physicalSurfaceSegments": [
       "lowerLanding",
       "ramp",
-      "upperLanding"
+      "upperLanding",
+      "lowerFrontApron",
+      "lowerLeftApron",
+      "lowerRightApron",
+      "upperFrontApron",
+      "upperLeftApron",
+      "upperRightApron"
     ],
     "landingWidth": 1.2,
     "landingDepth": 1.0,
+    "landingEgressDepth": 0.6,
+    "sideApronLength": 1.0,
     "flightWidth": 1.0,
     "navMeshArea": "Walkable"
   },
@@ -121,84 +130,32 @@
   "navigation": {
     "collectionGeometry": "PhysicsColliders",
     "triggerCollidersExcludedFromBake": true,
-    "maximumMinRegionArea": 0.05,
+    "retainConfiguredMinRegionArea": true,
     "slopeSafetyMarginDegrees": 0.5,
     "minimumAgentSlopeDegrees": 34.1900675,
     "floorStructureObjectTag": "Floor",
-    "discreteMovementProjectsToLocalNavMesh": true,
-    "physicalSurfaceHeightRaycast": {
-      "originHeightAboveAgent": 0.5,
-      "distance": 2.5,
-      "excludedLayers": [
-        "Agent",
-        "SimObjInvisible"
-      ],
-      "recognizedFloorStructureTag": "Floor",
-      "recognizedConnectorSurfaces": [
-        "walkableSurface",
-        "lowerLandingSurface",
-        "upperLandingSurface"
-      ]
+    "floorSources": {
+      "oneConsolidatedColliderPerFloor": true,
+      "includesEverySerializedRoomFloorSurface": true,
+      "semanticFloorSourcesIgnoredByNavMesh": true,
+      "roomAndDoorSeamsRemainPhysical": true
     },
-    "movementLookAhead": {
-      "distances": [
-        0.25,
-        0.5,
-        0.75
+    "landingApproaches": {
+      "requiredPerLanding": [
+        "front",
+        "left",
+        "right"
       ],
-      "sampleRadius": 0.25,
-      "maximumLateralOffset": 0.3,
-      "requiresPhysicalSurfaceAtHorizontalTarget": true,
-      "maximumPathLengthMultiplier": 5.0,
-      "pathLengthAdditiveTolerance": 0.1
+      "physicalApronDepth": 0.6,
+      "syntheticNavMeshLinks": false
     },
-    "landingBoundaryLinks": {
-      "createdAfterNavMeshBuild": true,
-      "agentTypeIds": "active NavMeshSurfaceExtended components",
-      "lateralEdgesPerLanding": 2,
-      "exposedEndEdgesPerLanding": 1,
-      "sampleOffsetsAlongLanding": [
-        -0.25,
-        0.0,
-        0.25
-      ],
-      "endEdgeSampleOffsetsAcrossLandingWidth": [
-        -0.3,
-        0.0,
-        0.3
-      ],
-      "stairQueryOffset": 0.3,
-      "roomQueryOffsets": [
-        0.3,
-        0.55,
-        0.8
-      ],
-      "sampleRadius": 0.25,
-      "width": 0.0,
-      "bidirectional": true,
-      "minimumSampledPairsPerLandingAndAgentType": 1,
-      "corridorClearance": {
-        "requiredBeforeLinkCreation": true,
-        "cast": "Physics.CapsuleCastAll",
-        "usesAgentBuildSettings": true,
-        "minimumRadius": 0.05,
-        "baseHeightOffset": 0.05,
-        "excludedLayers": [
-          "Agent",
-          "SimObjInvisible"
-        ],
-        "queryTriggerInteraction": "Ignore",
-        "allowedHits": [
-          "vertical connector walkable colliders",
-          "StructureObjectTag.Floor"
-        ]
-      },
-      "failureDiagnostics": [
-        "candidateCount",
-        "stairSampleCount",
-        "roomSampleCount"
-      ],
-      "lifecycleOwner": "VerticalConnectorAsset"
+    "wholeNavMeshValidation": {
+      "action": "GetNavMeshConnectivity",
+      "classification": "complete NavMesh.CalculatePath between triangle representatives",
+      "requiredComponentCount": 1,
+      "reportsTriangleCount": true,
+      "reportsComponentSizes": true,
+      "datasetRejectsFailure": true
     }
   },
   "generatorObjectClearance": {
@@ -247,6 +204,7 @@
       "flightRun": 4.5,
       "reservedWidth": 1.2,
       "reservedLength": 6.5,
+      "landingEgressDepth": 0.6,
       "walkableRampCollider": true
     },
     "landingPolygons": [

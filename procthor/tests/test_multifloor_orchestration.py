@@ -59,6 +59,7 @@ def _load_orchestration_module():
         numpy = types.ModuleType("numpy")
         numpy.asarray = lambda value: value
         numpy.array_equal = lambda left, right: left == right
+        numpy.ndarray = object
         sys.modules["numpy"] = numpy
 
         ai2thor = types.ModuleType("ai2thor")
@@ -103,7 +104,13 @@ def _load_orchestration_module():
         )
 
         generation = types.ModuleType("procthor.generation.generation")
+        generation.consolidate_walls = lambda walls: walls
+        generation.find_walls = lambda floorplan: {}
         generation.get_floor_polygons = lambda xz_poly_map: xz_poly_map
+        generation.get_xz_poly_map = lambda boundary_groups, room_ids: {}
+        generation.scale_boundary_groups = lambda boundary_groups, scale: (
+            boundary_groups
+        )
         sys.modules["procthor.generation.generation"] = generation
 
         house = types.ModuleType("procthor.generation.house")
@@ -198,7 +205,7 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
             orchestration,
             "_polygon_parts",
             return_value=[sliver, engine_epsilon, valid],
-        ):
+        ) as polygon_parts:
             surfaces = orchestration._surface_objects(
                 geometry=object(),
                 floor_index=0,
@@ -207,6 +214,10 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
                 material=None,
                 opening=None,
             )
+        polygon_parts.assert_called_once_with(
+            mock.ANY,
+            preferred_merge_axis="x",
+        )
 
         self.assertEqual(len(surfaces), 1)
         self.assertEqual(
@@ -217,6 +228,36 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
             {point["z"] for point in surfaces[0]["polygon"]},
             {2.0, 2.002},
         )
+
+    def test_surface_cells_merge_across_complete_edges(self):
+        class Rectangle:
+            def __init__(self, bounds):
+                self.bounds = bounds
+
+        cells = [
+            Rectangle((0.0, 0.0, 1.0, 1.0)),
+            Rectangle((0.0, 1.0, 1.0, 2.0)),
+            Rectangle((1.0, 0.0, 2.0, 1.0)),
+            Rectangle((1.0, 1.0, 2.0, 2.0)),
+        ]
+        with mock.patch.object(
+            orchestration,
+            "box",
+            side_effect=lambda *bounds: Rectangle(bounds),
+        ):
+            columns = orchestration._merge_surface_rectangles(cells, "z")
+            merged = orchestration._merge_surface_rectangles(columns, "x")
+
+        self.assertEqual(
+            sorted(rectangle.bounds for rectangle in columns),
+            [(0.0, 0.0, 1.0, 2.0), (1.0, 0.0, 2.0, 2.0)],
+        )
+        self.assertEqual(
+            [rectangle.bounds for rectangle in merged],
+            [(0.0, 0.0, 2.0, 2.0)],
+        )
+        with self.assertRaises(ValueError):
+            orchestration._merge_surface_rectangles(cells, "y")
 
     def test_schema2_preflight_success_and_failure(self):
         controller = _Controller({"supportedHouseSchemas": ["1.0.0", "2.0.0"]})
@@ -304,7 +345,7 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
             ],
         )
 
-    def test_doorway_safe_refit_retries_without_reseeding(self):
+    def test_doorway_safe_core_validation_retries_without_reseeding(self):
         seed_calls = []
 
         class Generator:
@@ -352,7 +393,7 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
             orchestration.random, "randint", return_value=77
         ) as randint, mock.patch.object(
             orchestration, "_select_house_spec", return_value=house_spec
-        ), mock.patch.object(
+        ) as select_house_spec, mock.patch.object(
             orchestration,
             "sample_complete_multifloor_structure",
             side_effect=[first_context, second_context],
@@ -367,12 +408,14 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
             ],
         ), mock.patch.object(
             orchestration,
-            "_locate_shared_stair_core",
+            "_validate_reserved_stair_core",
             side_effect=[
-                orchestration.StairCoreDoesNotFit("first doorway-safe refit failed"),
+                orchestration.StairCoreDoesNotFit(
+                    "first doorway-safe validation failed"
+                ),
                 (core, [2, 3]),
             ],
-        ) as locate_core, mock.patch.object(
+        ) as validate_core, mock.patch.object(
             orchestration, "_run_floor_generation_stages"
         ) as run_floor_stages, mock.patch.object(
             orchestration, "_assemble_house", return_value="house"
@@ -398,8 +441,9 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
                 }
             ],
         )
+        self.assertEqual(select_house_spec.call_count, 2)
         self.assertEqual(sample_structure.call_count, 2)
-        self.assertEqual(locate_core.call_count, 2)
+        self.assertEqual(validate_core.call_count, 2)
         self.assertEqual(run_floor_stages.call_count, 2)
         self.assertTrue(
             all(
@@ -567,6 +611,57 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
                     expected_y,
                 )
 
+    def test_landing_egress_requires_all_three_edges_on_both_landings(self):
+        candidate = types.SimpleNamespace(bounds=(1.0, 2.0, 2.2, 8.5))
+        lower = mock.Mock()
+        upper = mock.Mock()
+
+        with mock.patch.object(
+            orchestration, "box", side_effect=lambda *bounds: bounds
+        ):
+            lower.covers.return_value = True
+            upper.covers.return_value = True
+            self.assertTrue(
+                orchestration._has_required_landing_egress(
+                    [lower], [upper], candidate, "z"
+                )
+            )
+            self.assertEqual(lower.covers.call_count, 3)
+            self.assertEqual(upper.covers.call_count, 3)
+
+            lower.reset_mock()
+            upper.reset_mock()
+            lower.covers.return_value = True
+            upper.covers.side_effect = [True, False, True]
+            self.assertFalse(
+                orchestration._has_required_landing_egress(
+                    [lower], [upper], candidate, "z"
+                )
+            )
+
+        with mock.patch.object(
+            orchestration, "box", side_effect=lambda *bounds: bounds
+        ):
+            lower_aprons, upper_aprons = orchestration._landing_egress_polygons(
+                candidate, "z"
+            )
+        expected_lower = (
+            (1.0, 1.4, 2.2, 2.0),
+            (0.4, 2.0, 1.0, 3.0),
+            (2.2, 2.0, 2.8, 3.0),
+        )
+        expected_upper = (
+            (1.0, 8.5, 2.2, 9.1),
+            (0.4, 7.5, 1.0, 8.5),
+            (2.2, 7.5, 2.8, 8.5),
+        )
+        for actual, expected in zip(
+            lower_aprons + upper_aprons,
+            expected_lower + expected_upper,
+        ):
+            for actual_coordinate, expected_coordinate in zip(actual, expected):
+                self.assertAlmostEqual(actual_coordinate, expected_coordinate)
+
     def test_shared_stair_core_subtracts_each_host_door_clearance(self):
         lower_host = mock.Mock(name="lower_host")
         upper_host = mock.Mock(name="upper_host")
@@ -616,7 +711,11 @@ class MultiFloorOrchestrationTests(unittest.TestCase):
         lower_after_first.difference.assert_called_once_with(lower_clearances[1])
         upper_host.difference.assert_called_once_with(upper_clearance)
         lower_safe.intersection.assert_called_once_with(upper_safe)
-        fit_core.assert_called_once_with(shared_safe)
+        fit_core.assert_called_once_with(
+            shared_safe,
+            lower_egress_geometries=(lower_safe,),
+            upper_egress_geometries=(upper_safe,),
+        )
 
     def test_shared_stair_core_rejects_mismatched_clearance_floors(self):
         with self.assertRaisesRegex(

@@ -289,37 +289,50 @@ class OrthogonalPolygon:
                     area += (x1 - x0) * (z1 - z0)
         return out
 
-    def _join_neighboring_rectangles(
-        self, rects: Set[Tuple[float, float, float, float]]
-    ) -> Tuple[float, float, float, float]:
-        orig_rects = rects.copy()
-        out = set()
-        for rect1 in rects.copy():
-            x0_0, z0_0, x1_0, z1_0 = rect1
-            points1 = {(x0_0, z0_0), (x0_0, z1_0), (x1_0, z1_0), (x1_0, z0_0)}
-            for rect2 in rects - {rect1}:
-                x0_1, z0_1, x1_1, z1_1 = rect2
-                points2 = {(x0_1, z0_1), (x0_1, z1_1), (x1_1, z1_1), (x1_1, z0_1)}
-                if len(points1 & points2) == 2:
-                    out.add(
-                        (
-                            min(x0_0, x1_0, x0_1, x1_1),
-                            min(z0_0, z1_0, z0_1, z1_1),
-                            max(x0_0, x1_0, x0_1, x1_1),
-                            max(z0_0, z1_0, z0_1, z1_1),
-                        )
-                    )
-        return out - orig_rects
-
     def get_all_rectangles(self) -> Set[Tuple[float, float, float, float]]:
-        neighboring_rectangles = self.get_neighboring_rectangles().copy()
-        curr_rects = neighboring_rectangles
-        while True:
-            rect_candidates = self._join_neighboring_rectangles(curr_rects)
-            rects = curr_rects | rect_candidates
-            if len(rects) == len(curr_rects):
-                return curr_rects
-            curr_rects = rects
+        neighboring_rectangles = self.get_neighboring_rectangles()
+        x_cell_count = len(self.unique_xs) - 1
+        z_cell_count = len(self.unique_zs) - 1
+        prefix = [[0 for _ in range(z_cell_count + 1)] for _ in range(x_cell_count + 1)]
+        for x_index in range(x_cell_count):
+            for z_index in range(z_cell_count):
+                cell = (
+                    self.unique_xs[x_index],
+                    self.unique_zs[z_index],
+                    self.unique_xs[x_index + 1],
+                    self.unique_zs[z_index + 1],
+                )
+                prefix[x_index + 1][z_index + 1] = (
+                    int(cell in neighboring_rectangles)
+                    + prefix[x_index][z_index + 1]
+                    + prefix[x_index + 1][z_index]
+                    - prefix[x_index][z_index]
+                )
+
+        rectangles = set()
+        for min_x_index in range(x_cell_count):
+            for max_x_index in range(min_x_index + 1, x_cell_count + 1):
+                for min_z_index in range(z_cell_count):
+                    for max_z_index in range(min_z_index + 1, z_cell_count + 1):
+                        occupied_count = (
+                            prefix[max_x_index][max_z_index]
+                            - prefix[min_x_index][max_z_index]
+                            - prefix[max_x_index][min_z_index]
+                            + prefix[min_x_index][min_z_index]
+                        )
+                        cell_count = (max_x_index - min_x_index) * (
+                            max_z_index - min_z_index
+                        )
+                        if occupied_count == cell_count:
+                            rectangles.add(
+                                (
+                                    self.unique_xs[min_x_index],
+                                    self.unique_zs[min_z_index],
+                                    self.unique_xs[max_x_index],
+                                    self.unique_zs[max_z_index],
+                                )
+                            )
+        return rectangles
 
     def _get_edge_cross_count(self, point: Tuple[float, float]) -> int:
         edge_cross_count = 0

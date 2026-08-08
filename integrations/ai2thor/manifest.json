@@ -1,10 +1,10 @@
 {
-  "integrationVersion": "1.0.0",
+  "integrationVersion": "1.2.0",
   "engineRepository": "allenai/ai2thor",
   "engineBaseCommit": "24f79883b4889e3f0e6f4ae301808b9025872dfc",
   "patch": {
     "path": "ai2thor-schema2-multifloor.patch",
-    "sha256": "ad528f96a985401cda947d94dd24d209ecfa1e632887f96afc44a6b42afdff7b",
+    "sha256": "251d4100f66dee013bb695d610e5a09acd4dab082139f8007dde26259c14e64f",
     "applyCheck": "passed"
   },
   "supportedHouseSchemas": [
@@ -15,12 +15,13 @@
   "stairAsset": {
     "assetId": "Staircase_Straight_3m_1m_4_5m",
     "contractPath": "stair-asset-contract.json",
-    "contractSha256": "d18f188a13af79961d0a81ab17c18d048f5dd0c6032dfc41581e13f4d2171bcc"
+    "contractSha256": "9602dc0fb21b3b9e26889acefd19a0d189bd40f1d21a3c22333728279b267d0a"
   },
   "patchedSourceFiles": [
     "unity/Assets/Scripts/BaseAgentComponent.cs",
     "unity/Assets/Scripts/BaseFPSAgentController.cs",
     "unity/Assets/Scripts/NavMeshSurfaceExtended.cs",
+    "unity/Assets/Scripts/PhysicsRemoteFPSAgentController.cs",
     "unity/Assets/Scripts/ProceduralData.cs",
     "unity/Assets/Scripts/ProceduralTools.cs",
     "unity/Assets/Scripts/StructureObject.cs",
@@ -29,7 +30,8 @@
   "verification": {
     "diffCheck": "passed",
     "cleanApplyAtPinnedCommit": "passed",
-    "unityCompile": "requires persistent AI2-THOR checkout",
-    "unityPlayMode": "requires curated prefab"
+    "unityCompile": "passed: Linux64 player",
+    "unityRuntimeNavigation": "passed: fresh 2-floor and 3-floor fixtures accepted on first attempt; one navmesh component, complete long cross-floor paths, and complete front/left/right paths at every landing",
+    "unityPlayMode": "not run"
   }
 }

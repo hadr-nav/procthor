@@ -5,9 +5,10 @@ contains the deterministic geometry contract shared by the generator and the
 engine implementation:
 
 * floors are 3.0 m apart, with a 0.2 m slab and 2.8 m of clear height;
-* one 1.2 m by 6.5 m stair envelope is reserved through every floor;
-* a reference straight flight is 1.0 m wide and has a 4.5 m run; and
-* the second connector in a three-floor house is rotated by 180 degrees.
+* one 1.2 m by 6.5 m stair envelope is aligned across the floors;
+* a reference straight flight is 1.0 m wide and has a 4.5 m run;
+* every landing overlaps the host-room navmesh by 0.6 m at its end and sides;
+* three-floor houses use parallel stacked flights in the shared core.
 
 The helpers return ordinary dictionaries/lists so their output can be inserted
 directly into the procedural-house JSON assembled by the generation pipeline.
@@ -32,6 +33,7 @@ STAIR_CORE_WIDTH = 1.2
 STAIR_CORE_LENGTH = 6.5
 STAIR_FLIGHT_WIDTH = 1.0
 STAIR_FLIGHT_RUN = 4.5
+STAIR_LANDING_EGRESS_DEPTH = 0.6
 
 DEFAULT_STAIR_ASSET_ID = "Staircase_Straight_3m_1m_4_5m"
 
@@ -747,7 +749,7 @@ def _landing_rectangles(core: StairCore, reverse: bool) -> Tuple[Rectangle, Rect
 
 
 def stair_floor_opening(core: StairCore, floor_index: int) -> Rectangle:
-    """Return the full reserved stair-core slab opening for one floor."""
+    """Return the full reserved stair-core opening in one floor slab."""
 
     if not isinstance(core, StairCore):
         raise MultiFloorGeometryError("core must be a StairCore")
@@ -774,12 +776,11 @@ def make_vertical_connector(
     if connector_index is None:
         connector_index = lower_floor_index
     connector_index = _floor_index(connector_index, "connector_index")
-    reverse = connector_index % 2 == 1
-    lower_landing, upper_landing = _landing_rectangles(core, reverse=reverse)
+    lower_landing, upper_landing = _landing_rectangles(core, reverse=False)
     upper_floor_index = lower_floor_index + 1
     upper_floor_opening = stair_floor_opening(core, upper_floor_index)
     center_x, center_z = core.center
-    yaw = (core.yaw + (180.0 if reverse else 0.0)) % 360
+    yaw = core.yaw
     identifier = connector_id(lower_floor_index, connector_index)
 
     return {
@@ -802,6 +803,7 @@ def make_vertical_connector(
             "flightRun": core.contract.flight_run,
             "reservedWidth": core.contract.core_width,
             "reservedLength": core.contract.core_length,
+            "landingEgressDepth": STAIR_LANDING_EGRESS_DEPTH,
             "walkableRampCollider": True,
         },
         "landingPolygons": [
@@ -952,6 +954,7 @@ __all__ = [
     "STAIR_CORE_WIDTH",
     "STAIR_FLIGHT_RUN",
     "STAIR_FLIGHT_WIDTH",
+    "STAIR_LANDING_EGRESS_DEPTH",
     "StairCore",
     "StairCoreDoesNotFit",
     "StairGeometryContract",

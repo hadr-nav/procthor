@@ -153,13 +153,17 @@ class MultiFloorGeometryTests(unittest.TestCase):
         self.assertEqual(len(floor["floorSurfaces"]), 4)
         self.assertEqual(len(floor["ceilingSurfaces"]), 4)
 
-    def test_three_floor_connectors_alternate_180_degrees(self):
+    def test_three_floor_connectors_use_parallel_stacked_flights(self):
         core = multifloor.place_stair_core((0, 0, 8, 10), preferred_axis="z")
         connectors = multifloor.build_vertical_connectors(core, [2, 4, 6])
         self.assertEqual(len(connectors), 2)
-        self.assertEqual([item["rotation"]["y"] for item in connectors], [0.0, 180.0])
+        self.assertEqual([item["rotation"]["y"] for item in connectors], [0.0, 0.0])
         self.assertEqual([item["position"]["y"] for item in connectors], [0.0, 3.0])
         for connector_index, connector in enumerate(connectors):
+            self.assertEqual(
+                connector["assetContract"]["landingEgressDepth"],
+                multifloor.STAIR_LANDING_EGRESS_DEPTH,
+            )
             openings = {
                 (opening["floorId"], opening["surfaceType"]): opening
                 for opening in connector["openingPolygons"]
