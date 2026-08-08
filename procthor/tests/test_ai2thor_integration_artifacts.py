@@ -136,12 +136,8 @@ class IntegrationArtifactTests(unittest.TestCase):
             navigation["landingApproaches"]["requiredPerLanding"],
             ["front", "left", "right"],
         )
-        self.assertFalse(
-            navigation["landingApproaches"]["syntheticNavMeshLinks"]
-        )
-        self.assertTrue(
-            navigation["floorSources"]["oneConsolidatedColliderPerFloor"]
-        )
+        self.assertFalse(navigation["landingApproaches"]["syntheticNavMeshLinks"])
+        self.assertTrue(navigation["floorSources"]["oneConsolidatedColliderPerFloor"])
         self.assertTrue(
             navigation["floorSources"]["semanticFloorSourcesIgnoredByNavMesh"]
         )

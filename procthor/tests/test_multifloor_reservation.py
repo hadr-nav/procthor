@@ -83,9 +83,7 @@ class MultiFloorReservationTests(unittest.TestCase):
 
         self.assertEqual(host_ids, [2, 4, 6])
         self.assertEqual(core.long_axis, "z")
-        for structure, room_spec, host_id in zip(
-            rebuilt, remapped_specs, host_ids
-        ):
+        for structure, room_spec, host_id in zip(rebuilt, remapped_specs, host_ids):
             grid = structure.floorplan[1:-1, 1:-1]
             self.assertTrue(
                 all(

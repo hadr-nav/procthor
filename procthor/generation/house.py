@@ -167,9 +167,10 @@ class House:
         connectivity = connectivity_metadata.get("actionReturn")
         if not isinstance(connectivity, Mapping):
             error_message = connectivity_metadata.get("errorMessage")
-            warnings["GetNavMeshConnectivity"] = (
-                "Failed to inspect the complete navmesh"
-                + (": {}".format(error_message) if error_message else ".")
+            warnings[
+                "GetNavMeshConnectivity"
+            ] = "Failed to inspect the complete navmesh" + (
+                ": {}".format(error_message) if error_message else "."
             )
         elif not connectivity.get("connected", False):
             warnings["NavMeshNotConnected"] = (

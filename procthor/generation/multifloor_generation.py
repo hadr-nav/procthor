@@ -534,9 +534,7 @@ def _validate_reserved_stair_core(
             candidate,
             core.long_axis,
         )
-        or not all(
-            geometry.covers(object_clearance) for geometry in host_geometries
-        )
+        or not all(geometry.covers(object_clearance) for geometry in host_geometries)
     ):
         raise StairCoreDoesNotFit(
             "the reserved stair core or one of its three-sided landing "
@@ -727,9 +725,8 @@ def _reserve_shared_stair_host_region(
                     except StairCoreDoesNotFit:
                         continue
                     center_distance = (
-                        (reservation_center[0] - boundary_center[0]) ** 2
-                        + (reservation_center[1] - boundary_center[1]) ** 2
-                    )
+                        reservation_center[0] - boundary_center[0]
+                    ) ** 2 + (reservation_center[1] - boundary_center[1]) ** 2
                     valid.append(
                         (
                             sum(preference for preference, _ in combination),
@@ -1200,9 +1197,7 @@ def _merge_surface_rectangles(
     return merged
 
 
-def _polygon_parts(
-    geometry: Any, preferred_merge_axis: str = "x"
-) -> List[Polygon]:
+def _polygon_parts(geometry: Any, preferred_merge_axis: str = "x") -> List[Polygon]:
     if geometry.is_empty:
         return []
     xs, zs = _geometry_coordinates(geometry)
